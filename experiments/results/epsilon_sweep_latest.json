@@ -1,0 +1,189 @@
+{
+  "generated_at": "2026-04-20T12:12:49.766197",
+  "experiment": "epsilon_sweep",
+  "config": {
+    "num_rounds": 10,
+    "num_clients": 5,
+    "epsilon_values": [
+      "0.01",
+      "0.1",
+      "0.5",
+      "1.0",
+      "5.0",
+      "inf"
+    ]
+  },
+  "min_viable_epsilon": 0.01,
+  "viability_threshold": 0.7,
+  "results": [
+    {
+      "epsilon": 0.01,
+      "display_epsilon": "0.01",
+      "pre_fed_mean_f1": 0.4801,
+      "post_fed_mean_f1": 0.9376,
+      "mean_improvement": 0.4574,
+      "per_node_post_f1": {
+        "0": 0.9796,
+        "1": 0.9589,
+        "2": 0.8889,
+        "3": 0.9799,
+        "4": 0.8806
+      },
+      "convergence_curve": [
+        0.4223,
+        0.4487,
+        0.7611,
+        0.5846,
+        0.8689,
+        0.6212,
+        0.5518,
+        0.7862,
+        0.7713,
+        0.9376
+      ],
+      "is_min_viable": true
+    },
+    {
+      "epsilon": 0.1,
+      "display_epsilon": "0.1",
+      "pre_fed_mean_f1": 0.4801,
+      "post_fed_mean_f1": 0.9363,
+      "mean_improvement": 0.4561,
+      "per_node_post_f1": {
+        "0": 0.9796,
+        "1": 0.9589,
+        "2": 0.8889,
+        "3": 0.9733,
+        "4": 0.8806
+      },
+      "convergence_curve": [
+        0.4232,
+        0.4486,
+        0.7627,
+        0.5789,
+        0.8717,
+        0.6241,
+        0.5639,
+        0.785,
+        0.773,
+        0.9363
+      ],
+      "is_min_viable": false
+    },
+    {
+      "epsilon": 0.5,
+      "display_epsilon": "0.5",
+      "pre_fed_mean_f1": 0.4801,
+      "post_fed_mean_f1": 0.9363,
+      "mean_improvement": 0.4561,
+      "per_node_post_f1": {
+        "0": 0.9796,
+        "1": 0.9589,
+        "2": 0.8889,
+        "3": 0.9733,
+        "4": 0.8806
+      },
+      "convergence_curve": [
+        0.4142,
+        0.4565,
+        0.7673,
+        0.5106,
+        0.8616,
+        0.6273,
+        0.6504,
+        0.7881,
+        0.7727,
+        0.9363
+      ],
+      "is_min_viable": false
+    },
+    {
+      "epsilon": 1.0,
+      "display_epsilon": "1.0",
+      "pre_fed_mean_f1": 0.4801,
+      "post_fed_mean_f1": 0.9369,
+      "mean_improvement": 0.4567,
+      "per_node_post_f1": {
+        "0": 0.9664,
+        "1": 0.9655,
+        "2": 0.8889,
+        "3": 0.9664,
+        "4": 0.8971
+      },
+      "convergence_curve": [
+        0.4023,
+        0.587,
+        0.7756,
+        0.634,
+        0.8707,
+        0.6328,
+        0.9049,
+        0.7892,
+        0.8105,
+        0.9369
+      ],
+      "is_min_viable": false
+    },
+    {
+      "epsilon": 5.0,
+      "display_epsilon": "5.0",
+      "pre_fed_mean_f1": 0.4801,
+      "post_fed_mean_f1": 0.4852,
+      "mean_improvement": 0.0051,
+      "per_node_post_f1": {
+        "0": 0.487,
+        "1": 0.6173,
+        "2": 0.3049,
+        "3": 0.6438,
+        "4": 0.3731
+      },
+      "convergence_curve": [
+        0.2966,
+        0.3274,
+        0.3665,
+        0.401,
+        0.4365,
+        0.4639,
+        0.4641,
+        0.4687,
+        0.4944,
+        0.4852
+      ],
+      "is_min_viable": false
+    },
+    {
+      "epsilon": "inf",
+      "display_epsilon": "inf (no DP)",
+      "pre_fed_mean_f1": 0.4801,
+      "post_fed_mean_f1": 0.4865,
+      "mean_improvement": 0.0064,
+      "per_node_post_f1": {
+        "0": 0.5068,
+        "1": 0.5882,
+        "2": 0.3055,
+        "3": 0.6608,
+        "4": 0.3713
+      },
+      "convergence_curve": [
+        0.2881,
+        0.3273,
+        0.3706,
+        0.3987,
+        0.4306,
+        0.4471,
+        0.4615,
+        0.4732,
+        0.4801,
+        0.4865
+      ],
+      "is_min_viable": false
+    }
+  ],
+  "service_names": {
+    "0": "Login",
+    "1": "Payment",
+    "2": "Search",
+    "3": "Profile",
+    "4": "Admin"
+  }
+}

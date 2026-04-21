@@ -1,0 +1,33 @@
+# FedGate — Federated API Abuse Detection System
+# Python 3.11+
+#
+# Install all dependencies:
+#   pip install -r requirements.txt
+#
+# Verify TenSEAL after install (CKKS homomorphic encryption):
+#   python -c "import tenseal as ts; print(ts.__version__)"
+# If that fails: pip install tenseal --pre
+
+# --- Core data & ML (Phase 1 + 2) ---
+numpy==2.2.6
+pandas==2.2.3
+scikit-learn==1.8.0
+
+# --- Homomorphic encryption (Phase 3) ---
+tenseal>=0.3.14
+
+# --- Backend API (Phase 5) ---
+fastapi==0.115.12
+uvicorn==0.34.2
+python-multipart==0.0.20
+httpx==0.28.1          # async HTTP client used by FastAPI TestClient
+
+# --- Experiments & visualisation (Phase 4) ---
+matplotlib==3.10.3
+seaborn>=0.13.0
+
+# --- Utilities ---
+joblib==1.5.3           # model serialisation (saving/loading trained IF models)
+
+# --- Testing ---
+pytest>=8.0.0
