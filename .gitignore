@@ -7,3 +7,4 @@ frontend/dist/
 frontend/node_modules/
 *.egg-info/
 .DS_Store
+.claude/
