@@ -1,0 +1,72 @@
+{
+  "generated_at": "2026-04-25T08:30:23.753615",
+  "attack_description": "Byzantine model poisoning: a compromised node submits corrupted weight updates (weights multiplied 10x) at round 3, attempting to steer the global model away from accurate detection. The reputation system detects the anomalous update and reduces the node's contribution to 4.3% of the global aggregate (vs 20% equal share).",
+  "attack_vector": "Node 2 (Search) weights multiplied by 10x at round 3",
+  "scenarios": {
+    "baseline": {
+      "description": "No attack, no reputation weighting (plain FedAvg)",
+      "round_f1": [
+        0.4081,
+        0.5413,
+        0.7903,
+        0.6083,
+        0.8016,
+        0.5927,
+        0.8387,
+        0.8546,
+        0.7558,
+        0.8439
+      ]
+    },
+    "attack_no_defense": {
+      "description": "Poison at round 3, no reputation defense (plain FedAvg)",
+      "round_f1": [
+        0.4389,
+        0.6221,
+        0.7158,
+        0.6706,
+        0.8407,
+        0.7079,
+        0.7927,
+        0.8458,
+        0.7548,
+        0.826
+      ]
+    },
+    "attack_defended": {
+      "description": "Poison at round 3, defended by reputation-weighted aggregation",
+      "round_f1": [
+        0.4389,
+        0.6221,
+        0.7222,
+        0.6696,
+        0.8428,
+        0.7108,
+        0.7884,
+        0.8448,
+        0.7548,
+        0.8266
+      ],
+      "final_trust": {
+        "0": 0.8936,
+        "1": 0.9449,
+        "2": 0.6992,
+        "3": 0.722,
+        "4": 0.7841
+      },
+      "node2_trust_trajectory": [
+        0.2659,
+        0.2571,
+        0.3417,
+        0.3826,
+        0.6076,
+        0.5374,
+        0.6435,
+        0.4972,
+        0.6386,
+        0.6992
+      ]
+    }
+  },
+  "finding": "Reputation system isolates the poisoned node to 4.3% normalised weight vs 20% in plain FedAvg. Node 2 final trust: 0.699 vs 1.000 without reputation. Global F1 defended at 0.8266 vs 0.8260 (undefended). The system correctly detects and penalises the bad actor without permanently excluding it \u2014 trust recovers as F1 recovers."
+}

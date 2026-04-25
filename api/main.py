@@ -15,13 +15,16 @@ Key framing (updated from original goals):
     robust operating range (epsilon 0.01–1.0) and a heterogeneity cliff (epsilon 5.0+).
 
 Endpoints:
-  GET  /                   — health/service info
-  POST /run-federation     — synchronous blocking federation run (30–60 s)
-  GET  /node-status        — per-node metrics from last run
-  GET  /epsilon-results    — precomputed epsilon sweep with interpretation labels
-  GET  /poison-demo        — precomputed poison comparison with interpretation
-  GET  /federation-status  — current run state (idle/running/complete/error)
-  GET  /health             — simple liveness probe
+  GET  /                      — health/service info
+  POST /run-federation        — synchronous blocking federation run (30–60 s)
+  GET  /node-status           — per-node metrics from last run
+  GET  /epsilon-results       — precomputed epsilon sweep with interpretation labels
+  GET  /poison-demo           — precomputed poison comparison with interpretation
+  GET  /case-study-poison     — Byzantine poisoning case study (3-scenario comparison)
+  GET  /case-study-inversion  — Gradient inversion case study (DP noise vs SNR)
+  POST /run-case-studies      — re-run a case study experiment on demand
+  GET  /federation-status     — current run state (idle/running/complete/error)
+  GET  /health                — simple liveness probe
 
 CORS is open to all origins for local development. Narrow this before production.
 Federation endpoints are synchronous — CPU-bound work does not benefit from async
@@ -52,6 +55,18 @@ except ImportError as e:
 
 RESULTS_DIR = os.path.join(ROOT_DIR, 'experiments', 'results')
 SERVICE_NAMES = {0: 'Login', 1: 'Payment', 2: 'Search', 3: 'Profile', 4: 'Admin'}
+
+
+def _run_poison_cs() -> dict:
+    sys.path.insert(0, os.path.join(ROOT_DIR, 'experiments'))
+    from case_study_poison import run_poison_case_study
+    return run_poison_case_study()
+
+
+def _run_inversion_cs() -> dict:
+    sys.path.insert(0, os.path.join(ROOT_DIR, 'experiments'))
+    from case_study_inversion import run_inversion_case_study
+    return run_inversion_case_study()
 
 app = FastAPI(
     title='FedGate API',
@@ -84,6 +99,10 @@ class FederationRequest(BaseModel):
     use_reputation: bool = True
     poison_node_id: Optional[int] = None
     poison_round: int = 3
+
+
+class RunCaseStudiesRequest(BaseModel):
+    which: str = 'both'  # 'poison' | 'inversion' | 'both'
 
 
 class ApiResponse(BaseModel):
@@ -143,6 +162,7 @@ def root() -> dict:
                 '/node-status',
                 '/epsilon-results',
                 '/poison-demo',
+                '/case-study-poison',
                 '/federation-status',
                 '/docs',
             ],
@@ -361,6 +381,80 @@ def get_poison_demo() -> dict:
     }
 
 
+@app.get('/case-study-poison')
+def get_case_study_poison() -> dict:
+    path = os.path.join(RESULTS_DIR, 'case_study_poison_latest.json')
+    if not os.path.exists(path):
+        try:
+            print('WARNING: case_study_poison_latest.json missing — running now (~3 min)...')
+            _run_poison_cs()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail={
+                'status': 'error',
+                'data': {'error': str(exc), 'detail': 'Run experiments/case_study_poison.py manually'},
+            })
+
+    with open(path) as f:
+        data: dict = json.load(f)
+
+    return {'status': 'success', 'data': data, 'timestamp': datetime.now().isoformat()}
+
+
+@app.get('/case-study-inversion')
+def get_case_study_inversion() -> dict:
+    path = os.path.join(RESULTS_DIR, 'case_study_inversion_latest.json')
+    if not os.path.exists(path):
+        try:
+            print('case_study_inversion_latest.json missing — generating now...')
+            _run_inversion_cs()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail={
+                'status': 'error',
+                'data': {'error': str(exc), 'detail': 'Run experiments/case_study_inversion.py manually'},
+            })
+
+    with open(path) as f:
+        data: dict = json.load(f)
+
+    return {'status': 'success', 'data': data, 'timestamp': datetime.now().isoformat()}
+
+
+@app.post('/run-case-studies')
+def run_case_studies(request: RunCaseStudiesRequest) -> dict:
+    which = request.which.lower()
+    if which not in ('poison', 'inversion', 'both'):
+        raise HTTPException(status_code=400, detail={
+            'status': 'error',
+            'data': {'error': f'Invalid value for which: {which!r}. Use poison | inversion | both'},
+        })
+
+    results = {}
+    try:
+        if which in ('poison', 'both'):
+            print(f'Running poison case study (which={which})...')
+            results['poison'] = _run_poison_cs()
+        if which in ('inversion', 'both'):
+            print(f'Running inversion case study (which={which})...')
+            results['inversion'] = _run_inversion_cs()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail={
+            'status': 'error',
+            'data': {'error': str(exc), 'detail': type(exc).__name__},
+        })
+
+    return {
+        'status': 'success',
+        'data': {
+            'ran': which,
+            'summaries': {
+                k: {'finding': v.get('finding', '')[:200]}
+                for k, v in results.items()
+            },
+        },
+        'timestamp': datetime.now().isoformat(),
+    }
+
+
 @app.get('/federation-status')
 def get_federation_status() -> dict:
     return {
@@ -388,11 +482,16 @@ def health() -> dict:
 @app.on_event('startup')
 async def startup_event() -> None:
     os.makedirs(RESULTS_DIR, exist_ok=True)
-    epsilon_path = os.path.join(RESULTS_DIR, 'epsilon_sweep_latest.json')
-    poison_path = os.path.join(RESULTS_DIR, 'poison_demo_latest.json')
+    epsilon_path    = os.path.join(RESULTS_DIR, 'epsilon_sweep_latest.json')
+    poison_path     = os.path.join(RESULTS_DIR, 'poison_demo_latest.json')
+    cs_poison_path  = os.path.join(RESULTS_DIR, 'case_study_poison_latest.json')
+    cs_invert_path  = os.path.join(RESULTS_DIR, 'case_study_inversion_latest.json')
+    def _found(p): return 'FOUND' if os.path.exists(p) else 'MISSING'
     print('\nFedGate API starting...')
-    print(f'  Epsilon sweep data: {"FOUND" if os.path.exists(epsilon_path) else "MISSING — run experiments/epsilon_sweep.py"}')
-    print(f'  Poison demo data:   {"FOUND" if os.path.exists(poison_path) else "MISSING — run experiments/poison_demo.py"}')
+    print(f'  Epsilon sweep data:          {_found(epsilon_path)}')
+    print(f'  Poison demo data:            {_found(poison_path)}')
+    print(f'  CS1 Byzantine poisoning:     {_found(cs_poison_path)}')
+    print(f'  CS2 Gradient inversion:      {_found(cs_invert_path)}')
     print('  API ready.\n')
 
 

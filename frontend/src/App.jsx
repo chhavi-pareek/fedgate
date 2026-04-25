@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import axios from 'axios'
 import {
-  LineChart, Line, BarChart, Bar,
+  LineChart, Line, BarChart, Bar, ComposedChart,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ReferenceLine, ResponsiveContainer, Cell,
 } from 'recharts'
@@ -29,6 +29,68 @@ const NODE_META = {
   2: { name: 'Search',  attack: 'Scraping',            short: 'SCRAPING',       color: '#ffd43b', localF1: 0.9677, globalF1: 0.3138, postFed: 0.8889, miss: 69 },
   3: { name: 'Profile', attack: 'Parameter Tampering', short: 'PARAM TAMPER',   color: '#cc5de8', localF1: 0.9375, globalF1: 0.5137, postFed: 0.9664, miss: 49 },
   4: { name: 'Admin',   attack: 'Unauthorised Probing',short: 'UNAUTH PROBE',   color: '#ff6b6b', localF1: 0.9524, globalF1: 0.4310, postFed: 0.8971, miss: 57 },
+}
+
+const ATTACK_ANALYSIS = {
+  0: {
+    color: '#00d4ff',
+    how: 'Attacker fires thousands of stolen username/password pairs at the login endpoint using automated tools. Works because users reuse passwords across sites. One valid combo = full account takeover.',
+    indicators: ['requests_per_min > 60', 'failed_auth_streak > 5', 'HTTP 401/403 spike', 'inter_request_time < 0.3 s'],
+    defenses: [
+      { name: 'Rate Limiting',             detail: 'Cap login attempts to 5/min per IP. Throttle progressively on failure.' },
+      { name: 'Account Lockout',           detail: 'Lock account for 15 min after 5 consecutive failures. Alert the user.' },
+      { name: 'Multi-Factor Auth (MFA)',   detail: 'Require OTP/TOTP on every login. Makes stolen passwords useless alone.' },
+      { name: 'Breach Password Check',     detail: 'Reject passwords found in known breach databases (HaveIBeenPwned API).' },
+      { name: 'Anomaly-Based Detection',   detail: 'FedGate flags the failed_auth_streak + burst pattern as anomalous reconstruction error. After federation, all 5 nodes share this detection capability.' },
+    ],
+  },
+  1: {
+    color: '#51cf66',
+    how: 'Attacker floods the payment endpoint with a high volume of requests in a short window — either to exhaust server resources (DoS) or to bypass rate-checked business logic (e.g., free trial abuse, coupon hammering).',
+    indicators: ['requests_per_min > 120', 'payload_size_bytes unusually small (probing)', 'HTTP 429 responses increasing', 'inter_request_time ≈ 0'],
+    defenses: [
+      { name: 'Token Bucket Rate Limiting', detail: 'Allow bursts up to X tokens, refill at Y/sec. Smoothly absorbs spikes without blocking legitimate users.' },
+      { name: 'IP / Session Throttling',   detail: 'Enforce per-session request quotas independently of IP (catches proxied attacks).' },
+      { name: 'CAPTCHA on Threshold',      detail: 'Trigger challenge after 20 rapid requests. Stops bots, passes humans.' },
+      { name: 'Idempotency Keys',          detail: 'Reject duplicate payment requests — prevents charge-replay abuse.' },
+      { name: 'Anomaly-Based Detection',   detail: 'FedGate detects the flat inter_request_time + volume spike as a reconstruction outlier. The global encoder learned this pattern from the Payment node.' },
+    ],
+  },
+  2: {
+    color: '#ffd43b',
+    how: 'Attacker systematically harvests product listings, prices, or user data by crawling search/catalog endpoints at high speed. Goal is competitive intelligence or building a shadow dataset.',
+    indicators: ['unique_endpoints_per_session very high', 'requests_per_min 30–80 (sustained)', 'User-Agent absent or generic', 'Sequential query parameters'],
+    defenses: [
+      { name: 'Request Fingerprinting',    detail: 'Track endpoint visit sequences per session. Flag breadth-first traversal patterns.' },
+      { name: 'Honeypot Endpoints',        detail: 'Embed fake catalog URLs in HTML. Any request to them is definitively a bot.' },
+      { name: 'Robots.txt + Rate Cap',     detail: 'Enforce crawl-delay in robots.txt. Block agents that ignore it.' },
+      { name: 'CAPTCHA on Catalog Depth', detail: 'Challenge sessions that exceed N unique endpoints in M seconds.' },
+      { name: 'Anomaly-Based Detection',   detail: 'FedGate flags the high unique_endpoints_per_session feature as anomalous. Federation brings this knowledge to Login/Admin nodes that would otherwise miss scraping attempts.' },
+    ],
+  },
+  3: {
+    color: '#cc5de8',
+    how: 'Attacker manipulates API request parameters — IDs, prices, role fields — to access data or trigger actions they are not authorised for. Often exploits missing server-side validation.',
+    indicators: ['payload_size_bytes irregular (inflated or crafted)', 'HTTP 400/403 on parameter rejection', 'Sequential or out-of-range ID values', 'Unexpected field names in body'],
+    defenses: [
+      { name: 'Server-Side Validation',    detail: 'Never trust client-supplied IDs or role fields. Re-validate every parameter against the authenticated user context.' },
+      { name: 'JWT / HMAC Signing',        detail: 'Sign sensitive parameters (price, role, cart total) so tampering is detectable.' },
+      { name: 'Object-Level Auth (BOLA)',  detail: 'Check that the requesting user owns the resource ID in every endpoint, not just at login.' },
+      { name: 'Schema Enforcement',        detail: 'Reject requests whose body does not match the strict OpenAPI schema. Unknown fields = instant 400.' },
+      { name: 'Anomaly-Based Detection',   detail: 'FedGate detects the irregular payload_size_bytes distribution as a reconstruction outlier unique to parameter tampering attempts.' },
+    ],
+  },
+  4: {
+    color: '#ff6b6b',
+    how: 'Attacker systematically probes admin endpoints to map internal structure, find misconfigured endpoints, or leak configuration data — often as a reconnaissance step before a larger attack.',
+    indicators: ['unique_endpoints_per_session high (enumeration)', 'HTTP 403/404 spike', 'Requests to /admin, /config, /debug paths', 'Off-hours traffic pattern'],
+    defenses: [
+      { name: 'IP Allowlisting',           detail: 'Admin endpoints accessible only from known internal IPs or VPN. Hard block everything else.' },
+      { name: 'Audit Logging + Alerting',  detail: 'Log every admin request with full context. Alert on any 403 to /admin/* from non-whitelisted IPs.' },
+      { name: 'Path Obfuscation',          detail: 'Rename admin routes to non-guessable paths. Combine with allowlist — obscurity is not security alone.' },
+      { name: 'Anomaly-Based Detection',   detail: 'FedGate flags the enumeration pattern (high unique_endpoints + HTTP error codes) in the Admin node. After federation, even the Login node can identify this probe pattern.' },
+    ],
+  },
 }
 
 const ENDPOINTS = {
@@ -134,7 +196,7 @@ function DarkTooltip({ active, payload, label }) {
 // ── ProgressBar ────────────────────────────────────────────────────────────────
 
 function ProgressBar({ screen }) {
-  const steps = ['Live Traffic', 'The Problem', 'Federation', 'Results']
+  const steps = ['Live Traffic', 'The Problem', 'Federation', 'Results', 'Case Studies']
   return (
     <div style={{
       display: 'flex', alignItems: 'center',
@@ -156,16 +218,16 @@ function ProgressBar({ screen }) {
               color: i === screen ? S.textPri : S.textSec,
             }}>{label}</span>
           </div>
-          {i < 3 && (
+          {i < 4 && (
             <div style={{
-              width: 40, height: 2, margin: '0 10px',
+              width: 32, height: 2, margin: '0 8px',
               background: i < screen ? S.green : S.border, transition: 'all 0.3s',
             }} />
           )}
         </div>
       ))}
       <div style={{ marginLeft: 'auto', fontSize: 11, color: S.textSec, fontFamily: S.mono }}>
-        Step {screen + 1} of 4
+        Step {screen + 1} of 5
       </div>
     </div>
   )
@@ -216,7 +278,7 @@ function genRequest(nodeId) {
   }
 }
 
-function NodeTrafficPanel({ nodeId }) {
+function NodeTrafficPanel({ nodeId, onAttackClick }) {
   const meta = NODE_META[nodeId]
   const [log, setLog] = useState([])
   const [caught, setCaught] = useState(0)
@@ -252,10 +314,17 @@ function NodeTrafficPanel({ nodeId }) {
       </div>
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 3, minHeight: 220, overflow: 'hidden' }}>
         {log.map(r => (
-          <div key={r.id} style={{
-            display: 'flex', alignItems: 'center', gap: 5, padding: '3px 6px',
-            borderRadius: 4, background: bg[r.type], borderLeft: `2px solid ${tc[r.type]}`,
-          }}>
+          <div key={r.id}
+            onClick={() => r.type === 'detected' && onAttackClick(nodeId, r)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 5, padding: '3px 6px',
+              borderRadius: 4, background: bg[r.type], borderLeft: `2px solid ${tc[r.type]}`,
+              cursor: r.type === 'detected' ? 'pointer' : 'default',
+              transition: 'filter 0.15s',
+            }}
+            onMouseEnter={e => { if (r.type === 'detected') e.currentTarget.style.filter = 'brightness(1.4)' }}
+            onMouseLeave={e => { e.currentTarget.style.filter = 'none' }}
+          >
             <span style={{ color: S.textSec, flexShrink: 0, fontSize: 9, fontFamily: S.mono }}>{r.time}</span>
             <span style={{ color: S.textSec, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 9, fontFamily: S.mono }}>{r.endpoint}</span>
             <span style={{ color: tc[r.type], flexShrink: 0, fontSize: 9, fontFamily: S.mono }}>{r.code}</span>
@@ -264,6 +333,7 @@ function NodeTrafficPanel({ nodeId }) {
               background: tc[r.type] + '30', color: tc[r.type],
               fontSize: 8, fontWeight: 700, fontFamily: S.mono,
             }}>{r.label}</span>
+            {r.type === 'detected' && <span style={{ fontSize: 7, color: S.textSec, fontFamily: S.mono }}>▶</span>}
           </div>
         ))}
       </div>
@@ -272,20 +342,117 @@ function NodeTrafficPanel({ nodeId }) {
         <span style={{ color: '#475569' }}>Missed: {missed}</span>
       </div>
       <div style={{ fontSize: 10, color: S.textSec, fontStyle: 'italic' }}>
-        Cannot detect attacks it was never trained on
+        Click any detected attack to analyse it
       </div>
     </Card>
   )
 }
 
+function AttackDetailPanel({ nodeId, onClose }) {
+  const meta = NODE_META[nodeId]
+  const analysis = ATTACK_ANALYSIS[nodeId]
+
+  return (
+    <div style={{
+      borderTop: `2px solid ${meta.color}`,
+      background: '#0a1120', padding: '16px 24px',
+      display: 'flex', flexDirection: 'column', gap: 14, flexShrink: 0,
+      animation: 'fadeIn 0.25s ease',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <Dot color={meta.color} size={10} />
+        <span style={{ fontFamily: S.mono, fontSize: 14, fontWeight: 700, color: meta.color }}>
+          {meta.name} — {meta.attack}
+        </span>
+        <span style={{ fontSize: 10, color: S.red, fontFamily: S.mono, padding: '2px 8px', background: '#3b0707', borderRadius: 4, border: `1px solid ${S.red}40` }}>
+          ATTACK DETECTED
+        </span>
+        <button onClick={onClose} style={{
+          marginLeft: 'auto', background: 'transparent', border: `1px solid ${S.border}`,
+          color: S.textSec, borderRadius: 5, padding: '3px 10px', cursor: 'pointer', fontSize: 11,
+        }}>✕ Close</button>
+      </div>
+
+      <div style={{ display: 'flex', gap: 16 }}>
+
+        {/* LEFT — Attack Analysis */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ fontSize: 10, color: meta.color, fontFamily: S.mono, letterSpacing: '0.1em' }}>ATTACK ANALYSIS</div>
+
+          <div style={{ fontSize: 12, color: S.textPri, lineHeight: 1.7, padding: '10px 14px', background: S.card, borderRadius: 8, border: `1px solid ${meta.color}25` }}>
+            {analysis.how}
+          </div>
+
+          <div>
+            <div style={{ fontSize: 10, color: S.textSec, fontFamily: S.mono, marginBottom: 6 }}>INDICATORS OF COMPROMISE</div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+              {analysis.indicators.map(ind => (
+                <span key={ind} style={{
+                  padding: '3px 8px', borderRadius: 4, fontSize: 10, fontFamily: S.mono,
+                  background: S.red + '18', border: `1px solid ${S.red}40`, color: S.red,
+                }}>{ind}</span>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* RIGHT — Defense Playbook */}
+        <div style={{ flex: 1.2, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ fontSize: 10, color: S.green, fontFamily: S.mono, letterSpacing: '0.1em' }}>DEFENSE PLAYBOOK</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {analysis.defenses.map((d, i) => (
+              <div key={i} style={{
+                display: 'flex', gap: 10, padding: '8px 12px',
+                background: i === analysis.defenses.length - 1 ? '#0f2744' : S.card,
+                borderRadius: 7,
+                border: `1px solid ${i === analysis.defenses.length - 1 ? S.cyan + '40' : S.border}`,
+              }}>
+                <div style={{
+                  width: 20, height: 20, borderRadius: '50%', flexShrink: 0,
+                  background: i === analysis.defenses.length - 1 ? S.cyan + '20' : S.green + '18',
+                  border: `1.5px solid ${i === analysis.defenses.length - 1 ? S.cyan : S.green}`,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 9, color: i === analysis.defenses.length - 1 ? S.cyan : S.green, fontWeight: 700,
+                }}>{i + 1}</div>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: i === analysis.defenses.length - 1 ? S.cyan : S.textPri, marginBottom: 2 }}>
+                    {d.name}
+                  </div>
+                  <div style={{ fontSize: 10, color: S.textSec, lineHeight: 1.5 }}>{d.detail}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+      </div>
+    </div>
+  )
+}
+
 function Screen1({ onNext }) {
+  const [selectedNode, setSelectedNode] = useState(null)
+
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      <div style={{ flex: 1, overflowY: 'auto', padding: '16px 24px' }}>
+      <div style={{ flex: 1, overflowY: 'auto', padding: '16px 24px 8px' }}>
         <div style={{ display: 'flex', gap: 12 }}>
-          {[0, 1, 2, 3, 4].map(id => <NodeTrafficPanel key={id} nodeId={id} />)}
+          {[0, 1, 2, 3, 4].map(id => (
+            <NodeTrafficPanel key={id} nodeId={id}
+              onAttackClick={(nodeId) => setSelectedNode(prev => prev === nodeId ? null : nodeId)} />
+          ))}
         </div>
+        {!selectedNode && (
+          <div style={{ textAlign: 'center', marginTop: 10, fontSize: 11, color: S.textSec, fontStyle: 'italic' }}>
+            Click any red <span style={{ color: S.red, fontFamily: S.mono }}>DETECTED</span> row to analyse the attack and see its defense playbook
+          </div>
+        )}
       </div>
+
+      {selectedNode !== null && (
+        <AttackDetailPanel nodeId={selectedNode} onClose={() => setSelectedNode(null)} />
+      )}
+
       <div style={{
         borderTop: `1px solid ${S.border}`, padding: '14px 24px',
         display: 'flex', justifyContent: 'flex-end', alignItems: 'center', flexShrink: 0,
@@ -379,6 +546,11 @@ function Screen2({ config, setConfig, onBack, onNext }) {
               <div style={{ fontSize: 11, fontFamily: S.mono, color: isRobust ? S.green : S.red }}>
                 {isRobust ? '✓ Robust range' : '⚠ Heterogeneity cliff'}
               </div>
+              <div style={{ fontSize: 10, color: S.textSec, marginTop: 6, maxWidth: 200, lineHeight: 1.5 }}>
+                {isRobust
+                  ? 'Controls how much random noise masks the weights before sharing. Lower = stronger privacy. F1 stays above 0.93 at this level.'
+                  : 'At this level, noise overwhelms the shared signal. F1 drops — not from privacy cost, but because averaging breaks down across different attack types.'}
+              </div>
             </div>
 
             <div>
@@ -395,6 +567,9 @@ function Screen2({ config, setConfig, onBack, onNext }) {
             <div>
               <div style={{ fontSize: 11, color: S.textSec, fontFamily: S.mono, marginBottom: 10 }}>REPUTATION WEIGHTING</div>
               <PillToggle value={config.use_reputation} onChange={v => setConfig(c => ({ ...c, use_reputation: v }))} />
+              <div style={{ fontSize: 10, color: S.textSec, marginTop: 8, maxWidth: 180, lineHeight: 1.5 }}>
+                Nodes that consistently improve the model get more influence. Bad actors get sidelined automatically.
+              </div>
             </div>
 
             <div>
@@ -1101,7 +1276,7 @@ function Moment3({ config, postFed, meanImprovement, poisonEnabled, poisonMeta, 
   )
 }
 
-function Screen4({ config, setConfig, apiResult, onRunAgain }) {
+function Screen4({ config, setConfig, apiResult, onRunAgain, onCaseStudies }) {
   const [moment, setMoment] = useState(0)
   const [momentFade, setMomentFade] = useState(true)
   const [localConfig, setLocalConfig] = useState({ ...config })
@@ -1143,7 +1318,7 @@ function Screen4({ config, setConfig, apiResult, onRunAgain }) {
         @keyframes arrowRL { from { left: 105%; } to { left: -5%; } }
       `}</style>
 
-      <div style={{ display: 'flex', gap: 6, padding: '10px 24px', borderBottom: `1px solid ${S.border}`, background: '#0a1120', flexShrink: 0 }}>
+      <div style={{ display: 'flex', gap: 6, padding: '10px 24px', borderBottom: `1px solid ${S.border}`, background: '#0a1120', flexShrink: 0, alignItems: 'center' }}>
         {tabs.map((label, i) => (
           <button key={i} onClick={() => goMoment(i)} style={{
             padding: '6px 18px', borderRadius: 20, cursor: 'pointer',
@@ -1154,6 +1329,11 @@ function Screen4({ config, setConfig, apiResult, onRunAgain }) {
             fontFamily: S.mono, transition: 'all 0.2s',
           }}>{label}</button>
         ))}
+        <button onClick={onCaseStudies} style={{
+          marginLeft: 'auto', padding: '6px 16px', borderRadius: 20, cursor: 'pointer',
+          border: `1px solid ${S.cyan}`, background: 'transparent',
+          color: S.cyan, fontSize: 12, fontWeight: 600, fontFamily: S.mono,
+        }}>Case Studies →</button>
       </div>
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', opacity: momentFade ? 1 : 0, transition: 'opacity 0.3s ease' }}>
@@ -1181,6 +1361,340 @@ function Screen4({ config, setConfig, apiResult, onRunAgain }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// SCREEN 5 — CASE STUDIES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function LoadingPane({ text }) {
+  return (
+    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, color: S.textSec, fontFamily: S.mono, fontSize: 12 }}>
+      <Spinner />{text}
+    </div>
+  )
+}
+
+function RerunButton({ which, onDone, warningText }) {
+  const [state, setState] = useState('idle') // idle | confirming | running | done | error
+  const [errMsg, setErrMsg] = useState('')
+
+  const handleClick = () => {
+    if (warningText) { setState('confirming'); return }
+    doRun()
+  }
+
+  const doRun = () => {
+    setState('running')
+    axios.post(`${API_BASE}/run-case-studies`, { which })
+      .then(() => { setState('done'); onDone() })
+      .catch(e => { setState('error'); setErrMsg(e.message || 'Failed') })
+  }
+
+  if (state === 'confirming') return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <span style={{ fontSize: 11, color: S.yellow, fontFamily: S.mono }}>{warningText}</span>
+      <button onClick={doRun} style={btnStyle(S.red, '#fff')}>Run anyway</button>
+      <button onClick={() => setState('idle')} style={btnStyle(S.border, S.textSec)}>Cancel</button>
+    </div>
+  )
+
+  if (state === 'running') return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: S.cyan, fontFamily: S.mono }}>
+      <Spinner />Running experiment...
+    </div>
+  )
+
+  if (state === 'error') return (
+    <span style={{ fontSize: 11, color: S.red, fontFamily: S.mono }}>Error: {errMsg}</span>
+  )
+
+  if (state === 'done') return (
+    <span style={{ fontSize: 11, color: S.green, fontFamily: S.mono }}>✓ Done — data refreshed</span>
+  )
+
+  return (
+    <button onClick={handleClick} style={{ ...btnStyle(S.border, S.textSec), fontSize: 11, padding: '5px 14px' }}>
+      ↺ Re-run experiment
+    </button>
+  )
+}
+
+function CS1Poison({ data, onRerun }) {
+  if (!data) return <LoadingPane text="Loading case study data..." />
+
+  const { scenarios, finding, attack_vector } = data
+  const rounds = scenarios.baseline.round_f1.map((_, i) => i + 1)
+
+  const f1ChartData = rounds.map((r, i) => ({
+    round: r,
+    baseline:   scenarios.baseline.round_f1[i],
+    undefended: scenarios.attack_no_defense.round_f1[i],
+    defended:   scenarios.attack_defended.round_f1[i],
+  }))
+
+  const trustData = rounds.map((r, i) => ({
+    round: r,
+    trust: scenarios.attack_defended.node2_trust_trajectory[i],
+  }))
+
+  const baselineF1   = scenarios.baseline.round_f1[rounds.length - 1]
+  const undefendedF1 = scenarios.attack_no_defense.round_f1[rounds.length - 1]
+  const defendedF1   = scenarios.attack_defended.round_f1[rounds.length - 1]
+  const finalTrust   = scenarios.attack_defended.final_trust?.[2]
+    ?? scenarios.attack_defended.node2_trust_trajectory[rounds.length - 1]
+
+  function F1Tip({ active, payload, label }) {
+    if (!active || !payload?.length) return null
+    return (
+      <div style={{ background: '#0a1120', border: `1px solid ${S.border}`, borderRadius: 6, padding: '8px 12px', fontSize: 11 }}>
+        <div style={{ color: S.textSec, marginBottom: 3 }}>Round {label}</div>
+        {payload.map(p => (
+          <div key={p.dataKey} style={{ color: p.color, lineHeight: 1.8 }}>
+            {p.name}: {p.value?.toFixed(4)}
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 14, padding: '16px 24px', overflowY: 'auto' }}>
+      <div style={{ fontSize: 11, color: S.textSec, fontFamily: S.mono }}>
+        Attack vector: <span style={{ color: S.red }}>{attack_vector}</span>
+      </div>
+
+      <div style={{ display: 'flex', gap: 14 }}>
+        <Card style={{ flex: 1 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: S.textPri, marginBottom: 10 }}>
+            Global F1 — 3-Scenario Comparison
+          </div>
+          <ResponsiveContainer width="100%" height={240}>
+            <LineChart data={f1ChartData} margin={{ top: 4, right: 16, bottom: 16, left: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={S.border} />
+              <XAxis dataKey="round" stroke={S.textSec} tick={{ fontSize: 10, fill: S.textSec }}
+                label={{ value: 'Round', position: 'insideBottom', offset: -6, fill: S.textSec, fontSize: 10 }} />
+              <YAxis domain={[0, 1]} stroke={S.textSec} tick={{ fontSize: 10, fill: S.textSec }} tickCount={6} />
+              <Tooltip content={<F1Tip />} />
+              <ReferenceLine x={POISON_ROUND} stroke={S.red} strokeDasharray="4 2"
+                label={{ value: 'Poison injected', fill: S.red, fontSize: 9, position: 'insideTopRight' }} />
+              <Line type="monotone" dataKey="baseline"   name="Baseline (no attack)"   stroke={S.green} strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="undefended" name="Attack — no defense"    stroke={S.red}   strokeWidth={2} strokeDasharray="5 3" dot={false} />
+              <Line type="monotone" dataKey="defended"   name="Attack — defended"      stroke={S.cyan}  strokeWidth={2} dot={false} />
+              <Legend wrapperStyle={{ fontSize: 10, paddingTop: 8 }} />
+            </LineChart>
+          </ResponsiveContainer>
+        </Card>
+
+        <Card style={{ flex: 1 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: S.textPri, marginBottom: 10 }}>
+            Node 2 (Search) — Trust Score Trajectory
+          </div>
+          <ResponsiveContainer width="100%" height={240}>
+            <LineChart data={trustData} margin={{ top: 4, right: 16, bottom: 16, left: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={S.border} />
+              <XAxis dataKey="round" stroke={S.textSec} tick={{ fontSize: 10, fill: S.textSec }}
+                label={{ value: 'Round', position: 'insideBottom', offset: -6, fill: S.textSec, fontSize: 10 }} />
+              <YAxis domain={[0, 1.1]} stroke={S.textSec} tick={{ fontSize: 10, fill: S.textSec }} tickCount={6} />
+              <Tooltip content={<DarkTooltip />} />
+              <ReferenceLine x={POISON_ROUND} stroke={S.red} strokeDasharray="4 2"
+                label={{ value: 'Poison injected', fill: S.red, fontSize: 9, position: 'insideTopRight' }} />
+              <ReferenceLine y={0.1} stroke={S.red} strokeDasharray="3 2" strokeOpacity={0.5}
+                label={{ value: 'Floor 0.1', fill: S.red, fontSize: 8, position: 'insideBottomRight' }} />
+              <Line type="monotone" dataKey="trust" name="Trust" stroke={S.yellow} strokeWidth={2} dot={{ fill: S.yellow, r: 3 }} />
+            </LineChart>
+          </ResponsiveContainer>
+        </Card>
+      </div>
+
+      <div style={{ display: 'flex', gap: 10 }}>
+        {[
+          { label: 'Baseline F1 (round 10)',     val: baselineF1.toFixed(4),   color: S.green  },
+          { label: 'Undefended F1 (round 10)',   val: undefendedF1.toFixed(4), color: S.red    },
+          { label: 'Defended F1 (round 10)',     val: defendedF1.toFixed(4),   color: S.cyan   },
+          { label: 'Node 2 final trust',         val: finalTrust.toFixed(3),   color: S.yellow },
+          { label: 'Poisoned node weight',       val: '4.3%',                  color: S.purple },
+          { label: 'Undefended node weight',     val: '20.0%',                 color: S.red    },
+        ].map(s => (
+          <div key={s.label} style={{ flex: 1, textAlign: 'center', padding: '10px 8px', background: S.card, borderRadius: 8, border: `1px solid ${s.color}30` }}>
+            <div style={{ fontSize: 9, color: S.textSec, fontFamily: S.mono, marginBottom: 4 }}>{s.label}</div>
+            <div style={{ fontSize: '1.1rem', fontWeight: 800, fontFamily: S.mono, color: s.color }}>{s.val}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ borderLeft: `4px solid ${S.cyan}`, padding: '14px 18px', background: '#0f2744', borderRadius: '0 8px 8px 0', border: `1px solid ${S.border}`, borderLeftColor: S.cyan }}>
+        <div style={{ fontSize: 10, color: S.textSec, fontFamily: S.mono, letterSpacing: '0.1em', marginBottom: 4 }}>KEY FINDING</div>
+        <div style={{ fontSize: 12, color: S.textPri, lineHeight: 1.7 }}>{finding}</div>
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <RerunButton which="poison" onDone={onRerun}
+          warningText="Re-running takes ~3 minutes (3 full federation runs). Continue?" />
+      </div>
+    </div>
+  )
+}
+
+function CS2Inversion({ data, onRerun }) {
+  if (!data) return <LoadingPane text="Loading inversion case study data..." />
+
+  const { epsilon_results, finding, ckks_barrier, encoder_only_barrier, num_encoder_params } = data
+
+  const chartData = epsilon_results.map(r => ({
+    epsilon:        r.display_epsilon,
+    noise_mag:      r.noise_magnitude,
+    success_rate:   r.inversion_success_rate,
+    snr_db:         r.snr_db,
+  }))
+
+  const defaultEps = epsilon_results.find(r => r.epsilon === 1.0) ?? epsilon_results[3]
+
+  function InvTip({ active, payload, label }) {
+    if (!active || !payload?.length) return null
+    const row = epsilon_results.find(r => r.display_epsilon === label)
+    return (
+      <div style={{ background: '#0a1120', border: `1px solid ${S.border}`, borderRadius: 6, padding: '8px 12px', fontSize: 11 }}>
+        <div style={{ color: S.textSec, marginBottom: 3 }}>ε = {label}</div>
+        {row && <>
+          <div style={{ color: S.yellow, lineHeight: 1.8 }}>Noise L2: {row.noise_magnitude.toFixed(2)}</div>
+          <div style={{ color: S.red,    lineHeight: 1.8 }}>Success rate: {(row.inversion_success_rate * 100).toFixed(1)}%</div>
+          <div style={{ color: S.textSec, lineHeight: 1.8 }}>SNR: {row.snr_db.toFixed(1)} dB</div>
+        </>}
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 14, padding: '16px 24px', overflowY: 'auto' }}>
+      <div style={{ fontSize: 11, color: S.textSec, fontFamily: S.mono }}>
+        Encoder: <span style={{ color: S.cyan }}>{num_encoder_params} params</span> ·
+        Attack vector: malicious aggregator attempts to reconstruct raw API logs from weight uploads
+      </div>
+
+      <div style={{ display: 'flex', gap: 14 }}>
+        <Card style={{ flex: 1.3 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: S.textPri, marginBottom: 10 }}>
+            DP Noise Magnitude vs Simulated Inversion Success Rate
+          </div>
+          <ResponsiveContainer width="100%" height={260}>
+            <ComposedChart data={chartData} margin={{ top: 8, right: 52, bottom: 24, left: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={S.border} />
+              <XAxis dataKey="epsilon" stroke={S.textSec} tick={{ fontSize: 10, fill: S.textSec }}
+                label={{ value: 'ε (epsilon)', position: 'insideBottom', offset: -8, fill: S.textSec, fontSize: 10 }} />
+              <YAxis yAxisId="left" stroke={S.yellow} tick={{ fontSize: 10, fill: S.yellow }}
+                label={{ value: 'Noise Magnitude', angle: -90, position: 'insideLeft', fill: S.yellow, fontSize: 9 }} />
+              <YAxis yAxisId="right" orientation="right" domain={[0, 1]} stroke={S.red}
+                tick={{ fontSize: 10, fill: S.red }}
+                label={{ value: 'Inversion Success Rate', angle: 90, position: 'insideRight', fill: S.red, fontSize: 9 }} />
+              <Tooltip content={<InvTip />} />
+              <ReferenceLine yAxisId="left" x="1.0" stroke={S.cyan} strokeDasharray="5 3"
+                label={{ value: 'FedGate default', fill: S.cyan, fontSize: 8, position: 'insideTopRight' }} />
+              <Bar yAxisId="left" dataKey="noise_mag" name="Noise magnitude" fill={S.yellow} fillOpacity={0.8} radius={[4, 4, 0, 0]} />
+              <Line yAxisId="right" type="monotone" dataKey="success_rate" name="Inversion success rate"
+                stroke={S.red} strokeWidth={2.5} strokeDasharray="5 3" dot={{ fill: S.red, r: 4 }} />
+            </ComposedChart>
+          </ResponsiveContainer>
+          <div style={{ display: 'flex', gap: 14, marginTop: 4 }}>
+            <span style={{ fontSize: 10, color: S.yellow, fontFamily: S.mono }}>■ Noise magnitude (left axis)</span>
+            <span style={{ fontSize: 10, color: S.red, fontFamily: S.mono }}>— Inversion success rate (right axis)</span>
+            <span style={{ fontSize: 10, color: S.cyan, fontFamily: S.mono }}>⋮ FedGate default ε=1.0</span>
+          </div>
+        </Card>
+
+        <Card style={{ flex: 0.7, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: S.textPri }}>Three defence layers</div>
+          {[
+            { color: S.cyan,   icon: '🔒', label: 'CKKS Homomorphic Encryption', body: ckks_barrier },
+            { color: S.purple, icon: '📊', label: 'Laplace Differential Privacy', body: `noise_scale = max_norm / ε = ${(1/1.0).toFixed(2)} at ε=1.0. Formally bounds information leakage per update.` },
+            { color: S.green,  icon: '⚡', label: 'Encoder-Only Sharing', body: encoder_only_barrier },
+          ].map(b => (
+            <div key={b.label} style={{ padding: '10px 12px', background: S.bg, borderRadius: 8, border: `1px solid ${b.color}30` }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: b.color, marginBottom: 4 }}>{b.icon} {b.label}</div>
+              <div style={{ fontSize: 10, color: S.textSec, lineHeight: 1.6 }}>{b.body}</div>
+            </div>
+          ))}
+        </Card>
+      </div>
+
+      <div style={{ display: 'flex', gap: 10 }}>
+        {[
+          { label: 'SNR at ε=1.0 (default)',    val: `${defaultEps.snr_db.toFixed(1)} dB`,                          color: S.cyan   },
+          { label: 'Inversion rate at ε=1.0',   val: `${(defaultEps.inversion_success_rate*100).toFixed(1)}%`,       color: S.red    },
+          { label: 'Noise magnitude at ε=1.0',  val: defaultEps.noise_magnitude.toFixed(2),                          color: S.yellow },
+          { label: 'Encoder params shared',      val: String(num_encoder_params),                                     color: S.green  },
+          { label: 'Decoder params (local)',     val: String(num_encoder_params),                                     color: S.purple },
+        ].map(s => (
+          <div key={s.label} style={{ flex: 1, textAlign: 'center', padding: '10px 6px', background: S.card, borderRadius: 8, border: `1px solid ${s.color}30` }}>
+            <div style={{ fontSize: 9, color: S.textSec, fontFamily: S.mono, marginBottom: 4 }}>{s.label}</div>
+            <div style={{ fontSize: '1.05rem', fontWeight: 800, fontFamily: S.mono, color: s.color }}>{s.val}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ borderLeft: `4px solid ${S.cyan}`, padding: '14px 18px', background: '#0f2744', borderRadius: '0 8px 8px 0', border: `1px solid ${S.border}`, borderLeftColor: S.cyan }}>
+        <div style={{ fontSize: 10, color: S.textSec, fontFamily: S.mono, letterSpacing: '0.1em', marginBottom: 4 }}>KEY FINDING</div>
+        <div style={{ fontSize: 12, color: S.textPri, lineHeight: 1.7 }}>{finding}</div>
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <RerunButton which="inversion" onDone={onRerun} />
+      </div>
+    </div>
+  )
+}
+
+function Screen5({ onBack }) {
+  const [tab, setTab] = useState(0)
+  const [tabFade, setTabFade] = useState(true)
+  const [poisonData, setPoisonData] = useState(null)
+  const [inversionData, setInversionData] = useState(null)
+
+  const fetchPoison = () => {
+    axios.get(`${API_BASE}/case-study-poison`)
+      .then(res => { if (res.data.status === 'success') setPoisonData(res.data.data) })
+      .catch(() => {})
+  }
+  const fetchInversion = () => {
+    axios.get(`${API_BASE}/case-study-inversion`)
+      .then(res => { if (res.data.status === 'success') setInversionData(res.data.data) })
+      .catch(() => {})
+  }
+
+  useEffect(() => { fetchPoison(); fetchInversion() }, [])
+
+  const goTab = (n) => {
+    setTabFade(false)
+    setTimeout(() => { setTab(n); setTabFade(true) }, 180)
+  }
+
+  const tabs = ['CS1 · Byzantine Poisoning Attack', 'CS2 · Gradient Inversion Attack']
+
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div style={{ display: 'flex', gap: 6, padding: '10px 24px', borderBottom: `1px solid ${S.border}`, background: '#0a1120', flexShrink: 0 }}>
+        {tabs.map((label, i) => (
+          <button key={i} onClick={() => goTab(i)} style={{
+            padding: '6px 18px', borderRadius: 20, cursor: 'pointer',
+            border: tab === i ? 'none' : `1px solid ${S.border}`,
+            background: tab === i ? S.cyan : 'transparent',
+            color: tab === i ? S.bg : S.textSec,
+            fontSize: 12, fontWeight: tab === i ? 700 : 400,
+            fontFamily: S.mono, transition: 'all 0.2s',
+          }}>{label}</button>
+        ))}
+      </div>
+
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', opacity: tabFade ? 1 : 0, transition: 'opacity 0.2s ease' }}>
+        {tab === 0 && <CS1Poison data={poisonData} onRerun={() => { setPoisonData(null); fetchPoison() }} />}
+        {tab === 1 && <CS2Inversion data={inversionData} onRerun={() => { setInversionData(null); fetchInversion() }} />}
+      </div>
+
+      <div style={{ borderTop: `1px solid ${S.border}`, padding: '12px 24px', display: 'flex', flexShrink: 0 }}>
+        <button onClick={onBack} style={btnStyle(S.border, S.textSec)}>← Back to Results</button>
+      </div>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // APP ROOT
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1189,6 +1703,7 @@ const SCREEN_META = [
   { title: 'The Isolation Problem',  subtitle: 'High local accuracy. Low global awareness. Attackers exploit the gaps.' },
   { title: 'Federation in Progress', subtitle: null },
   { title: 'Federation Complete',    subtitle: 'Results across all five nodes after privacy-preserving federation.' },
+  { title: 'Case Studies',           subtitle: 'Precomputed experiments: Byzantine poisoning attack · DP noise robustness.' },
 ]
 
 export default function App() {
@@ -1249,8 +1764,11 @@ export default function App() {
           />
         )}
         {screen === 3 && (
-          <Screen4 config={config} setConfig={setConfig} apiResult={apiResult} onRunAgain={(newConfig) => { setApiResult(null); setConfig(newConfig); go(2) }} />
+          <Screen4 config={config} setConfig={setConfig} apiResult={apiResult}
+            onRunAgain={(newConfig) => { setApiResult(null); setConfig(newConfig); go(2) }}
+            onCaseStudies={() => go(4)} />
         )}
+        {screen === 4 && <Screen5 onBack={() => go(3)} />}
       </div>
     </div>
   )

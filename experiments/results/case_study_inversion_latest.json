@@ -1,0 +1,57 @@
+{
+  "generated_at": "2026-04-25T10:55:53.822908",
+  "attack_description": "Gradient inversion / parameter inference attack: a malicious aggregator or network interceptor attempts to reconstruct raw API request logs from the shared encoder weight vector. At each privacy budget (epsilon), we compute how much signal theoretically remains in the 272-parameter encoder update after Laplace DP noise is applied.",
+  "attack_vector": "Malicious aggregator or passive network interceptor attempts to reconstruct raw API logs from the shared encoder weight vector",
+  "ckks_barrier": "Aggregator only decrypts the averaged ciphertext, never individual node uploads \u2014 structural isolation before DP is even applied",
+  "encoder_only_barrier": "Decoder weights (node-specific reconstruction patterns) never leave the node \u2014 50% of model parameters are permanently local",
+  "num_encoder_params": 272,
+  "clean_weight_norm": 1.0,
+  "epsilon_results": [
+    {
+      "epsilon": 0.01,
+      "display_epsilon": "0.01",
+      "noise_scale": 100.0,
+      "noise_magnitude": 2264.5484,
+      "snr_db": -67.1,
+      "inversion_success_rate": 0.0,
+      "mean_abs_deviation": 101.998566
+    },
+    {
+      "epsilon": 0.1,
+      "display_epsilon": "0.1",
+      "noise_scale": 10.0,
+      "noise_magnitude": 226.4548,
+      "snr_db": -47.1,
+      "inversion_success_rate": 0.0,
+      "mean_abs_deviation": 10.199857
+    },
+    {
+      "epsilon": 0.5,
+      "display_epsilon": "0.5",
+      "noise_scale": 2.0,
+      "noise_magnitude": 45.291,
+      "snr_db": -33.12,
+      "inversion_success_rate": 0.0,
+      "mean_abs_deviation": 2.039971
+    },
+    {
+      "epsilon": 1.0,
+      "display_epsilon": "1.0",
+      "noise_scale": 1.0,
+      "noise_magnitude": 22.6455,
+      "snr_db": -27.1,
+      "inversion_success_rate": 0.0483,
+      "mean_abs_deviation": 1.019986
+    },
+    {
+      "epsilon": 5.0,
+      "display_epsilon": "5.0",
+      "noise_scale": 0.2,
+      "noise_magnitude": 4.5291,
+      "snr_db": -13.12,
+      "inversion_success_rate": 0.2813,
+      "mean_abs_deviation": 0.203997
+    }
+  ],
+  "finding": "At epsilon=1.0 (FedGate default), SNR is approximately -27.1 dB, reducing simulated inversion success rate to 4.8%. Combined with CKKS encryption (aggregator never sees individual updates) and encoder-only sharing (decoder stays local), gradient inversion is infeasible at any operationally viable epsilon value."
+}
