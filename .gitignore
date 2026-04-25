@@ -1,10 +1,79 @@
-__pycache__/
-*.pyc
-*.pyo
+# Python
+**/__pycache__/
+**/*.py[cod]
+**/*.pyo
+**/*.pyd
+**/.Python
+**/*.egg-info/
+**/*.egg
+**/.eggs/
+**/dist/
+**/build/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.coverage
+**/htmlcov/
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+ENV/
+**/venv/
+**/.venv/
+
+# Node
+**/node_modules/
+**/.npm/
+**/dist/
+**/.next/
+**/.nuxt/
+**/out/
+**/.output/
+**/dist-ssr/
+
+# Logs
+**/*.log
+**/logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment / secrets
 .env
-node_modules/
-frontend/dist/
-frontend/node_modules/
-*.egg-info/
+.env.*
+!.env.example
+*.local
+
+# OS
 .DS_Store
+**/.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.swp
+*~
+
+# Data / experiment outputs
+data/raw/
+experiments/results/
+**/*.pkl
+**/*.h5
+**/*.parquet
+
+# Misc
 .claude/
+*.tmp
+*.bak

@@ -93,6 +93,14 @@ const ATTACK_ANALYSIS = {
   },
 }
 
+const KC_ORANGE = '#f97316'
+
+const KC_EVENTS = {
+  0: { event_type: 'AUTH_SUCCESS',  endpoint: '/api/login',          code: 200 },
+  1: { event_type: 'PAYMENT_PROBE', endpoint: '/api/payment/confirm', code: 200 },
+  4: { event_type: 'ADMIN_PROBE',   endpoint: '/api/admin/config',    code: 403 },
+}
+
 const ENDPOINTS = {
   0: ['/api/login', '/api/auth/verify', '/api/session/create', '/api/user/authenticate'],
   1: ['/api/payment/process', '/api/checkout', '/api/payment/confirm', '/api/billing/charge'],
@@ -278,11 +286,12 @@ function genRequest(nodeId) {
   }
 }
 
-function NodeTrafficPanel({ nodeId, onAttackClick }) {
+function NodeTrafficPanel({ nodeId, onAttackClick, killChainEntry = null, killChainAlerted = false }) {
   const meta = NODE_META[nodeId]
   const [log, setLog] = useState([])
   const [caught, setCaught] = useState(0)
   const [missed, setMissed] = useState(0)
+  const prevKcType = useRef(null)
 
   useEffect(() => {
     const tick = () => {
@@ -296,14 +305,39 @@ function NodeTrafficPanel({ nodeId, onAttackClick }) {
     return () => clearInterval(id)
   }, [nodeId])
 
-  const tc = { normal: S.green, detected: S.red, missed: '#475569' }
-  const bg = { normal: '#052e16', detected: '#3b0707', missed: '#1e293b' }
+  useEffect(() => {
+    if (!killChainEntry) { prevKcType.current = null; return }
+    if (killChainEntry.event_type !== prevKcType.current) {
+      prevKcType.current = killChainEntry.event_type
+      setLog(prev => [...prev.slice(-7), {
+        id: Math.random(), time: nowStr(),
+        endpoint: killChainEntry.endpoint, code: killChainEntry.code,
+        type: 'killchain', label: killChainEntry.event_type,
+      }])
+    }
+  }, [killChainEntry])
+
+  const tc = { normal: S.green, detected: S.red, missed: '#475569', killchain: KC_ORANGE }
+  const bg = { normal: '#052e16', detected: '#3b0707', missed: '#1e293b', killchain: '#3b1a06' }
 
   return (
-    <Card style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <Card style={{
+      flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8,
+      ...(killChainAlerted ? {
+        border: `1px solid ${KC_ORANGE}90`,
+        boxShadow: `0 0 18px ${KC_ORANGE}28`,
+        transition: 'border 0.4s ease, box-shadow 0.4s ease',
+      } : {}),
+    }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Dot color={meta.color} />
+        <Dot color={killChainAlerted ? KC_ORANGE : meta.color} />
         <span style={{ fontFamily: S.mono, fontSize: 13, fontWeight: 700, color: S.textPri }}>{meta.name}</span>
+        {killChainAlerted && (
+          <span style={{
+            fontSize: 8, padding: '1px 5px', borderRadius: 3, fontFamily: S.mono, fontWeight: 700,
+            background: KC_ORANGE + '25', color: KC_ORANGE, border: `1px solid ${KC_ORANGE}50`,
+          }}>KILL CHAIN</span>
+        )}
       </div>
       <div style={{
         display: 'inline-flex', padding: '2px 8px', borderRadius: 4, alignSelf: 'flex-start',
@@ -321,6 +355,7 @@ function NodeTrafficPanel({ nodeId, onAttackClick }) {
               borderRadius: 4, background: bg[r.type], borderLeft: `2px solid ${tc[r.type]}`,
               cursor: r.type === 'detected' ? 'pointer' : 'default',
               transition: 'filter 0.15s',
+              ...(r.type === 'killchain' ? { animation: 'fadeIn 0.4s ease' } : {}),
             }}
             onMouseEnter={e => { if (r.type === 'detected') e.currentTarget.style.filter = 'brightness(1.4)' }}
             onMouseLeave={e => { e.currentTarget.style.filter = 'none' }}
@@ -334,6 +369,9 @@ function NodeTrafficPanel({ nodeId, onAttackClick }) {
               fontSize: 8, fontWeight: 700, fontFamily: S.mono,
             }}>{r.label}</span>
             {r.type === 'detected' && <span style={{ fontSize: 7, color: S.textSec, fontFamily: S.mono }}>▶</span>}
+            {r.type === 'killchain' && (
+              <span style={{ fontSize: 7, color: KC_ORANGE, fontFamily: S.mono, flexShrink: 0 }}>session_7f3a</span>
+            )}
           </div>
         ))}
       </div>
@@ -430,33 +468,222 @@ function AttackDetailPanel({ nodeId, onClose }) {
   )
 }
 
+function KillChainAlertPanel({ onReset }) {
+  const [propagated, setPropagated] = useState([])
+
+  useEffect(() => {
+    const order = [0, 1, 4, 3, 2]
+    order.forEach((nodeId, i) => {
+      setTimeout(() => setPropagated(prev => [...prev, nodeId]), i * 280 + 500)
+    })
+  }, [])
+
+  const KCA_ITEMS = [
+    { sent: true,  label: 'Hashed session ID',  detail: 'SHA-256(session_7f3a) — irreversible' },
+    { sent: true,  label: 'Event timestamp',     detail: 'T+0s, T+60s, T+2m7s (relative offsets)' },
+    { sent: true,  label: 'Node identifier',     detail: 'Nodes 0, 1, 4 — no service metadata' },
+    { sent: true,  label: 'SESSION_BLOCK cmd',   detail: 'Broadcast to all 5 nodes via federation channel' },
+    { sent: false, label: 'Raw API logs',         detail: 'Stayed local — never left the node' },
+    { sent: false, label: 'Session credentials', detail: 'Stayed local — never left the node' },
+    { sent: false, label: 'User identity',        detail: 'Stayed local — never left the node' },
+  ]
+
+  return (
+    <div style={{
+      borderTop: `2px solid ${KC_ORANGE}`,
+      background: '#140900', padding: '14px 24px',
+      display: 'flex', flexDirection: 'column', gap: 10, flexShrink: 0,
+      animation: 'fadeIn 0.35s ease',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <span style={{ fontFamily: S.mono, fontSize: 14, fontWeight: 700, color: KC_ORANGE }}>
+          KILL CHAIN DETECTED
+        </span>
+        <span style={{
+          padding: '3px 10px', borderRadius: 4, fontFamily: S.mono, fontSize: 11, fontWeight: 700,
+          background: KC_ORANGE + '20', border: `1px solid ${KC_ORANGE}50`, color: KC_ORANGE,
+        }}>Login → Payment → Admin</span>
+        <span style={{ fontSize: 11, color: S.textSec, fontFamily: S.mono }}>
+          session_7f3a · 127 s elapsed · no single node fired
+        </span>
+        <button onClick={onReset} style={{
+          marginLeft: 'auto', background: 'transparent', border: `1px solid ${S.border}`,
+          color: S.textSec, borderRadius: 5, padding: '3px 10px', cursor: 'pointer', fontSize: 11,
+        }}>↺ Reset Demo</button>
+      </div>
+
+      <div style={{ display: 'flex', gap: 14 }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ fontSize: 10, color: KC_ORANGE, fontFamily: S.mono, letterSpacing: '0.1em' }}>
+            WHY THIS EVADES LOCAL DETECTION
+          </div>
+          <div style={{
+            fontSize: 12, color: S.textPri, lineHeight: 1.7,
+            padding: '9px 12px', background: S.card, borderRadius: 8,
+            border: `1px solid ${KC_ORANGE}20`, flex: 1,
+          }}>
+            Each node saw exactly 1 request — far below any per-node threshold. No local
+            autoencoder fired. The kill chain was only visible when session hashes from all
+            three nodes were correlated in the federation layer.
+          </div>
+          <div style={{
+            fontSize: 10, color: S.textSec, fontFamily: S.mono,
+            padding: '7px 10px', background: '#0f172a', borderRadius: 6,
+            border: `1px solid ${S.border}`, lineHeight: 1.5,
+          }}>
+            FedGate's CKKS channel carries session-level threat intelligence alongside model
+            weights — no raw data leaves any node.
+          </div>
+        </div>
+
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ fontSize: 10, color: S.green, fontFamily: S.mono, letterSpacing: '0.1em' }}>
+            WHAT CROSSED THE FEDERATION CHANNEL
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+            {KCA_ITEMS.map((item, i) => (
+              <div key={i} style={{ display: 'flex', gap: 7, alignItems: 'flex-start' }}>
+                <span style={{ fontSize: 11, flexShrink: 0, color: item.sent ? S.green : '#475569' }}>
+                  {item.sent ? '✓' : '✗'}
+                </span>
+                <div>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: item.sent ? S.green : '#475569' }}>
+                    {item.label}
+                  </span>
+                  <span style={{ fontSize: 10, color: S.textSec }}> — {item.detail}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ flex: 1.1, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ fontSize: 10, color: S.red, fontFamily: S.mono, letterSpacing: '0.1em' }}>
+            SESSION BLOCK PROPAGATED VIA FEDERATION
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+            {[0, 1, 4, 3, 2].map(id => {
+              const done = propagated.includes(id)
+              return (
+                <div key={id} style={{
+                  display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px',
+                  borderRadius: 5,
+                  background: done ? '#3b0707' : S.card,
+                  border: `1px solid ${done ? S.red + '50' : S.border}`,
+                  transition: 'all 0.35s ease',
+                  opacity: done ? 1 : 0.35,
+                }}>
+                  <Dot color={done ? S.red : '#475569'} size={6} />
+                  <span style={{ fontSize: 11, fontFamily: S.mono, color: done ? S.red : S.textSec, flex: 1 }}>
+                    {NODE_META[id].name}
+                  </span>
+                  {done && (
+                    <span style={{
+                      fontSize: 8, fontFamily: S.mono, fontWeight: 700,
+                      color: S.red, background: S.red + '20',
+                      padding: '1px 5px', borderRadius: 3,
+                    }}>SESSION BLOCKED</span>
+                  )}
+                  {!done && <Spinner />}
+                </div>
+              )
+            })}
+          </div>
+          <div style={{ fontSize: 10, color: S.textSec, fontStyle: 'italic' }}>
+            session_7f3a rejected at all {propagated.length}/5 nodes
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function Screen1({ onNext }) {
   const [selectedNode, setSelectedNode] = useState(null)
+  const [kcStep, setKcStep]       = useState(0)
+  const [kcRunning, setKcRunning] = useState(false)
+
+  function runKillChainDemo() {
+    if (kcRunning) return
+    setSelectedNode(null)
+    setKcStep(1); setKcRunning(true)
+    setTimeout(() => setKcStep(2), 2500)
+    setTimeout(() => setKcStep(3), 5000)
+    setTimeout(() => { setKcStep(4); setKcRunning(false) }, 6500)
+  }
+
+  function resetDemo() { setKcStep(0); setKcRunning(false) }
+
+  const kcEntryFor = (id) => {
+    if (id === 0 && kcStep >= 1) return KC_EVENTS[0]
+    if (id === 1 && kcStep >= 2) return KC_EVENTS[1]
+    if (id === 4 && kcStep >= 3) return KC_EVENTS[4]
+    return null
+  }
+
+  const kcAlerted = (id) => kcStep >= 4 && [0, 1, 4].includes(id)
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+
+      {kcStep > 0 && kcStep < 4 && (
+        <div style={{
+          padding: '7px 24px', background: '#140900',
+          borderBottom: `1px solid ${KC_ORANGE}35`,
+          display: 'flex', alignItems: 'center', gap: 10,
+          fontSize: 12, fontFamily: S.mono, flexShrink: 0,
+          animation: 'fadeIn 0.3s ease',
+        }}>
+          {kcRunning && <Spinner />}
+          <span style={{ color: KC_ORANGE, fontWeight: 700 }}>KILL CHAIN SIM</span>
+          <span style={{ color: S.textSec }}>—</span>
+          {[{l:'Login',s:1},{l:'→',s:null},{l:'Payment',s:2},{l:'→',s:null},{l:'Admin',s:3}].map((item,i) => (
+            <span key={i} style={{
+              color: item.s === null ? '#475569' : kcStep >= item.s ? KC_ORANGE : '#475569',
+              fontWeight: item.s && kcStep >= item.s ? 700 : 400,
+            }}>{item.l}</span>
+          ))}
+          <span style={{ marginLeft: 'auto', color: S.textSec, fontSize: 10 }}>
+            Each node sees 1 request · no local alert fires
+          </span>
+        </div>
+      )}
+
       <div style={{ flex: 1, overflowY: 'auto', padding: '16px 24px 8px' }}>
         <div style={{ display: 'flex', gap: 12 }}>
           {[0, 1, 2, 3, 4].map(id => (
             <NodeTrafficPanel key={id} nodeId={id}
-              onAttackClick={(nodeId) => setSelectedNode(prev => prev === nodeId ? null : nodeId)} />
+              onAttackClick={(nodeId) => { if (kcStep === 0) setSelectedNode(prev => prev === nodeId ? null : nodeId) }}
+              killChainEntry={kcEntryFor(id)}
+              killChainAlerted={kcAlerted(id)}
+            />
           ))}
         </div>
-        {!selectedNode && (
+        {!selectedNode && kcStep === 0 && (
           <div style={{ textAlign: 'center', marginTop: 10, fontSize: 11, color: S.textSec, fontStyle: 'italic' }}>
-            Click any red <span style={{ color: S.red, fontFamily: S.mono }}>DETECTED</span> row to analyse the attack and see its defense playbook
+            Click any red <span style={{ color: S.red, fontFamily: S.mono }}>DETECTED</span> row to analyse the attack · or run the Kill Chain Demo below
           </div>
         )}
       </div>
 
-      {selectedNode !== null && (
-        <AttackDetailPanel nodeId={selectedNode} onClose={() => setSelectedNode(null)} />
-      )}
+      {kcStep >= 4
+        ? <KillChainAlertPanel onReset={resetDemo} />
+        : selectedNode !== null && kcStep === 0
+          ? <AttackDetailPanel nodeId={selectedNode} onClose={() => setSelectedNode(null)} />
+          : null
+      }
 
       <div style={{
         borderTop: `1px solid ${S.border}`, padding: '14px 24px',
-        display: 'flex', justifyContent: 'flex-end', alignItems: 'center', flexShrink: 0,
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0,
       }}>
+        <button
+          onClick={kcStep === 0 ? runKillChainDemo : resetDemo}
+          disabled={kcRunning}
+          style={btnStyle(kcStep === 0 ? KC_ORANGE : S.border, kcStep === 0 ? '#fff' : S.textSec, kcRunning)}
+        >
+          {kcStep === 0 ? 'Kill Chain Demo' : kcRunning ? 'Simulating...' : 'Reset Demo'}
+        </button>
         <button onClick={onNext} style={btnStyle(S.cyan, S.bg)}>See the Problem →</button>
       </div>
     </div>
@@ -688,6 +915,15 @@ function Screen3({ config, onComplete }) {
           msgs.push(`Round ${next}: Nodes retrained (FedProx α=0.7)`)
           msgs.push(`Round ${next}: EMA threshold updated (momentum=0.8)`)
         }
+        if (next === 1) {
+          msgs.push(`Round ${next}: Session correlation window initialised (180 s)`)
+          msgs.push(`Round ${next}: Defense playbook registry initialised across 5 nodes`)
+        }
+        if (next % 2 === 0) {
+          msgs.push(`Round ${next}: Defense strategies synchronized — all nodes share full playbook`)
+        } else if (next > 1) {
+          msgs.push(`Round ${next}: Session correlation signals federated alongside encoder weights`)
+        }
         if (config.poison_demo && next === POISON_ROUND) {
           msgs.push(`Round ${POISON_ROUND}: ⚠️ Node ${config.poison_node_id} (${NODE_META[config.poison_node_id].name}) submitted anomalous weights`)
           msgs.push(`Round ${POISON_ROUND}: Reputation system flagged Node ${config.poison_node_id}`)
@@ -861,7 +1097,7 @@ function Screen3({ config, onComplete }) {
         background: S.card, fontSize: 11, color: S.green, fontFamily: S.mono,
         textAlign: 'center', flexShrink: 0,
       }}>
-        🔒 0 raw API requests have left any node | Encoder weights only | CKKS encrypted
+        🔒 0 raw API requests have left any node | Encoder weights + defense signals | CKKS encrypted
       </div>
     </div>
   )
@@ -1028,11 +1264,12 @@ function Moment2({ convData, config, onNext }) {
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
           {[
-            { icon: '🔒', text: 'CKKS Homomorphic Encryption' },
-            { icon: '📊', text: `Differential Privacy ε=${config.epsilon}` },
-            { icon: '⚡', text: 'FedProx α=0.7' },
+            { icon: '🔒', text: 'CKKS Homomorphic Encryption', color: S.border },
+            { icon: '📊', text: `Differential Privacy ε=${config.epsilon}`, color: S.border },
+            { icon: '⚡', text: 'FedProx α=0.7', color: S.border },
+            { icon: '⛓', text: 'Kill Chain Defense Sync', color: KC_ORANGE + '50' },
           ].map(b => (
-            <div key={b.text} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 14px', background: S.card, borderRadius: 20, border: `1px solid ${S.border}`, fontSize: 11, fontFamily: S.mono, color: S.textPri }}>
+            <div key={b.text} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 14px', background: S.card, borderRadius: 20, border: `1px solid ${b.color}`, fontSize: 11, fontFamily: S.mono, color: S.textPri }}>
               {b.icon} {b.text}
             </div>
           ))}
@@ -1103,6 +1340,29 @@ function Moment3({ config, postFed, meanImprovement, poisonEnabled, poisonMeta, 
               +{meanImprovement.toFixed(4)}
             </div>
             <div style={{ fontSize: 12, color: S.textSec, marginTop: 4 }}>mean F1 improvement across all 5 nodes</div>
+          </div>
+
+          <div style={{
+            padding: '12px 14px', background: '#0d1a10',
+            border: `1px solid ${KC_ORANGE}30`, borderRadius: 8,
+          }}>
+            <div style={{ fontSize: 10, color: KC_ORANGE, fontFamily: S.mono, letterSpacing: '0.1em', marginBottom: 8 }}>
+              KILL CHAIN DEFENSE — PRE vs POST FEDERATION
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {[
+                { label: 'Detection scope',    pre: 'per-node only',          post: 'cross-node (all 5)',  postColor: KC_ORANGE },
+                { label: 'Session block',       pre: 'local reject only',      post: '5/5 nodes coordinated', postColor: S.red },
+                { label: 'Detection window',    pre: '—',                      post: '180 s rolling',      postColor: S.textPri },
+                { label: 'Federation channel',  pre: 'weights only',           post: 'weights + signals',  postColor: S.cyan },
+              ].map(row => (
+                <div key={row.label} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 11 }}>
+                  <span style={{ color: S.textSec, width: 120, flexShrink: 0 }}>{row.label}</span>
+                  <span style={{ color: '#475569', fontFamily: S.mono, flex: 1, textDecoration: 'line-through', fontSize: 10 }}>{row.pre}</span>
+                  <span style={{ color: row.postColor, fontFamily: S.mono, fontWeight: 700 }}>{row.post}</span>
+                </div>
+              ))}
+            </div>
           </div>
 
           <div>

@@ -48,6 +48,7 @@ sys.path.insert(0, ROOT_DIR)
 
 try:
     from backend.federation import run_federation
+    from backend.kill_chain_detector import generate_demo_scenario
 except ImportError as e:
     print(f'\nERROR: Could not import federation module: {e}')
     print('Ensure tenseal is installed: pip install tenseal')
@@ -466,6 +467,16 @@ def get_federation_status() -> dict:
             'last_run_id': federation_state['last_run_id'],
             'error': federation_state['error'],
         },
+        'timestamp': datetime.now().isoformat(),
+    }
+
+
+@app.get('/kill-chain-demo')
+def kill_chain_demo() -> dict:
+    """Return the scripted kill chain scenario for frontend step-by-step animation."""
+    return {
+        'status': 'success',
+        'data': generate_demo_scenario(),
         'timestamp': datetime.now().isoformat(),
     }
 
