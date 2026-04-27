@@ -95,11 +95,6 @@ const ATTACK_ANALYSIS = {
 
 const KC_ORANGE = '#f97316'
 
-const KC_EVENTS = {
-  0: { event_type: 'AUTH_SUCCESS',  endpoint: '/api/login',          code: 200 },
-  1: { event_type: 'PAYMENT_PROBE', endpoint: '/api/payment/confirm', code: 200 },
-  4: { event_type: 'ADMIN_PROBE',   endpoint: '/api/admin/config',    code: 403 },
-}
 
 const ENDPOINTS = {
   0: ['/api/login', '/api/auth/verify', '/api/session/create', '/api/user/authenticate'],
@@ -468,130 +463,648 @@ function AttackDetailPanel({ nodeId, onClose }) {
   )
 }
 
-function KillChainAlertPanel({ onReset }) {
-  const [propagated, setPropagated] = useState([])
+// ── Kill Chain Demo Overlay ────────────────────────────────────────────────────
 
-  useEffect(() => {
-    const order = [0, 1, 4, 3, 2]
-    order.forEach((nodeId, i) => {
-      setTimeout(() => setPropagated(prev => [...prev, nodeId]), i * 280 + 500)
-    })
-  }, [])
+const KC_PHASES = [
+  { label: 'SETUP',       title: 'The Setup — What the Attacker Knows' },
+  { label: 'T + 0s',      title: 'Stage 1 — Login Node Hit' },
+  { label: 'T + 60s',     title: 'Stage 2 — Payment Node Hit' },
+  { label: 'T + 2m 7s',   title: 'Stage 3 — Admin Node Hit' },
+  { label: 'BLIND SPOT',  title: 'The Problem — Zero Local Alerts' },
+  { label: 'FEDERATION',  title: 'Federation Correlates the Session' },
+  { label: 'DETECTED',    title: 'Kill Chain Detected' },
+  { label: 'BLOCKED',     title: 'Session Blocked Across All Nodes' },
+]
 
-  const KCA_ITEMS = [
-    { sent: true,  label: 'Hashed session ID',  detail: 'SHA-256(session_7f3a) — irreversible' },
-    { sent: true,  label: 'Event timestamp',     detail: 'T+0s, T+60s, T+2m7s (relative offsets)' },
-    { sent: true,  label: 'Node identifier',     detail: 'Nodes 0, 1, 4 — no service metadata' },
-    { sent: true,  label: 'SESSION_BLOCK cmd',   detail: 'Broadcast to all 5 nodes via federation channel' },
-    { sent: false, label: 'Raw API logs',         detail: 'Stayed local — never left the node' },
-    { sent: false, label: 'Session credentials', detail: 'Stayed local — never left the node' },
-    { sent: false, label: 'User identity',        detail: 'Stayed local — never left the node' },
-  ]
+const KC_ATTACK_EVENTS = [
+  {
+    node_id: 0, node_name: 'Login', time: 'T + 0s',
+    event_type: 'AUTH_SUCCESS', endpoint: '/api/login', code: 200,
+    note: '1 successful login — indistinguishable from normal user activity.',
+    local_verdict: 'Node 0 sees 1 login at 1 req/min. No threshold crossed. No alert.',
+  },
+  {
+    node_id: 1, node_name: 'Payment', time: 'T + 60s',
+    event_type: 'PAYMENT_PROBE', endpoint: '/api/payment/confirm', code: 200,
+    note: 'Same session, 60s later. 1 payment request — looks like a normal purchase.',
+    local_verdict: 'Node 1 sees 1 payment request. Below every rate limit. No alert.',
+  },
+  {
+    node_id: 4, node_name: 'Admin', time: 'T + 2m 7s',
+    event_type: 'ADMIN_PROBE', endpoint: '/api/admin/config', code: 403,
+    note: 'Admin config probe. Gets a 403. Locally looks like a user accidentally clicking a restricted link.',
+    local_verdict: 'Node 4 sees 1 admin probe, rejected. No recognisable pattern. No alert.',
+  },
+]
+
+function KcMiniNode({ id, state = 'idle', payload = null }) {
+  const m = NODE_META[id]
+  const styles = {
+    idle:    { border: m.color + '50', bg: S.card,           dot: m.color,   text: S.textSec, shadow: 'none' },
+    active:  { border: KC_ORANGE,      bg: KC_ORANGE + '18', dot: KC_ORANGE, text: KC_ORANGE, shadow: `0 0 18px ${KC_ORANGE}50` },
+    hit:     { border: m.color + '70', bg: m.color + '0a',   dot: m.color,   text: m.color,   shadow: 'none' },
+    blocked: { border: S.red,          bg: S.red + '18',     dot: S.red,     text: S.red,     shadow: `0 0 14px ${S.red}40` },
+    dimmed:  { border: '#243040',      bg: '#111827',        dot: '#2d3748', text: '#2d3748', shadow: 'none' },
+    alerted: { border: '#3d3020',      bg: '#1a1208',        dot: '#6b4c10', text: '#6b4c10', shadow: 'none' },
+  }
+  const c = styles[state] || styles.idle
 
   return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+      <div style={{
+        width: 84, borderRadius: 8, padding: '10px 6px 8px',
+        background: c.bg, border: `2px solid ${c.border}`,
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5,
+        transition: 'all 0.45s ease',
+        boxShadow: c.shadow,
+      }}>
+        <Dot color={c.dot} size={7} />
+        <span style={{ fontSize: 9, fontFamily: S.mono, fontWeight: 700, color: c.text, letterSpacing: '0.04em' }}>
+          {m.name.toUpperCase()}
+        </span>
+        {state === 'active' && payload && (
+          <div style={{ fontSize: 8, fontFamily: S.mono, textAlign: 'center', animation: 'fadeIn 0.35s', color: KC_ORANGE }}>
+            {payload.event_type}<br />
+            <span style={{ color: payload.code < 400 ? S.green : S.red }}>HTTP {payload.code}</span>
+          </div>
+        )}
+        {state === 'hit' && (
+          <span style={{ fontSize: 8, fontFamily: S.mono, color: m.color }}>✓ HIT</span>
+        )}
+        {state === 'blocked' && (
+          <span style={{ fontSize: 8, fontFamily: S.mono, color: S.red, fontWeight: 700 }}>BLOCKED</span>
+        )}
+        {state === 'alerted' && (
+          <span style={{ fontSize: 8, fontFamily: S.mono, color: '#6b4c10' }}>NO ALERT</span>
+        )}
+      </div>
+      <span style={{ fontSize: 9, color: S.textSec, fontFamily: S.mono }}>Node {id}</span>
+    </div>
+  )
+}
+
+function KcNarration({ children }) {
+  return (
     <div style={{
-      borderTop: `2px solid ${KC_ORANGE}`,
-      background: '#140900', padding: '14px 24px',
-      display: 'flex', flexDirection: 'column', gap: 10, flexShrink: 0,
-      animation: 'fadeIn 0.35s ease',
+      marginTop: 8, padding: '12px 16px', borderRadius: 8,
+      background: S.card, border: `1px solid ${S.border}`,
+      fontSize: 13, color: S.textPri, lineHeight: 1.75,
+      animation: 'fadeIn 0.4s ease',
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <span style={{ fontFamily: S.mono, fontSize: 14, fontWeight: 700, color: KC_ORANGE }}>
-          KILL CHAIN DETECTED
-        </span>
-        <span style={{
-          padding: '3px 10px', borderRadius: 4, fontFamily: S.mono, fontSize: 11, fontWeight: 700,
-          background: KC_ORANGE + '20', border: `1px solid ${KC_ORANGE}50`, color: KC_ORANGE,
-        }}>Login → Payment → Admin</span>
-        <span style={{ fontSize: 11, color: S.textSec, fontFamily: S.mono }}>
-          session_7f3a · 127 s elapsed · no single node fired
-        </span>
-        <button onClick={onReset} style={{
-          marginLeft: 'auto', background: 'transparent', border: `1px solid ${S.border}`,
-          color: S.textSec, borderRadius: 5, padding: '3px 10px', cursor: 'pointer', fontSize: 11,
-        }}>↺ Reset Demo</button>
+      {children}
+    </div>
+  )
+}
+
+function PhaseSetup() {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 22 }}>
+      <div style={{
+        padding: '9px 20px', borderRadius: 8,
+        background: KC_ORANGE + '15', border: `1px solid ${KC_ORANGE}50`,
+        fontFamily: S.mono, fontSize: 12, color: KC_ORANGE, letterSpacing: '0.05em',
+      }}>
+        TARGET: session_7f3a · 3-stage account takeover · 1 request per node
       </div>
 
-      <div style={{ display: 'flex', gap: 14 }}>
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div style={{ fontSize: 10, color: KC_ORANGE, fontFamily: S.mono, letterSpacing: '0.1em' }}>
-            WHY THIS EVADES LOCAL DETECTION
-          </div>
-          <div style={{
-            fontSize: 12, color: S.textPri, lineHeight: 1.7,
-            padding: '9px 12px', background: S.card, borderRadius: 8,
-            border: `1px solid ${KC_ORANGE}20`, flex: 1,
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', justifyContent: 'center' }}>
+        <div style={{
+          padding: '12px 16px', borderRadius: 8, minWidth: 88, textAlign: 'center',
+          border: `1px solid ${S.red}50`, background: S.red + '10',
+          fontFamily: S.mono, fontSize: 11, color: S.red,
+        }}>
+          ATTACKER<br />
+          <span style={{ fontSize: 9, color: S.textSec }}>session_7f3a</span>
+        </div>
+        <span style={{ fontSize: 18, color: '#334155' }}>→</span>
+        <div style={{ display: 'flex', gap: 10 }}>
+          {[0, 1, 2, 3, 4].map(id => (
+            <KcMiniNode key={id} id={id} state={[0, 1, 4].includes(id) ? 'idle' : 'dimmed'} />
+          ))}
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
+        {KC_ATTACK_EVENTS.map((ev, i) => (
+          <div key={i} style={{
+            padding: '10px 16px', borderRadius: 7, minWidth: 140, textAlign: 'center',
+            border: `1px solid ${KC_ORANGE}30`, background: KC_ORANGE + '08',
+            fontFamily: S.mono, fontSize: 11,
           }}>
-            Each node saw exactly 1 request — far below any per-node threshold. No local
-            autoencoder fired. The kill chain was only visible when session hashes from all
-            three nodes were correlated in the federation layer.
+            <div style={{ color: KC_ORANGE, fontWeight: 700, marginBottom: 4 }}>{ev.time}</div>
+            <div style={{ color: NODE_META[ev.node_id].color, marginBottom: 2 }}>{ev.node_name}</div>
+            <div style={{ color: S.textSec, fontSize: 9 }}>{ev.event_type}</div>
           </div>
-          <div style={{
-            fontSize: 10, color: S.textSec, fontFamily: S.mono,
-            padding: '7px 10px', background: '#0f172a', borderRadius: 6,
-            border: `1px solid ${S.border}`, lineHeight: 1.5,
-          }}>
-            FedGate's CKKS channel carries session-level threat intelligence alongside model
-            weights — no raw data leaves any node.
+        ))}
+      </div>
+
+      <KcNarration>
+        The attacker has compromised <span style={{ color: KC_ORANGE, fontFamily: S.mono }}>session_7f3a</span>.
+        They will execute a 3-stage account takeover — test credentials at Login, probe payment access,
+        then attempt admin escalation. Each stage hits a <em>different</em> API node spaced 60–90 seconds apart,
+        at exactly 1 request per node. Press <strong>Next</strong> to watch each stage play out.
+      </KcNarration>
+    </div>
+  )
+}
+
+function PhaseAttackStage({ phase }) {
+  const stageIdx = phase - 1
+  const ev = KC_ATTACK_EVENTS[stageIdx]
+  const hitSoFar = KC_ATTACK_EVENTS.slice(0, stageIdx).map(e => e.node_id)
+
+  const nodeState = (id) => {
+    if (id === ev.node_id) return 'active'
+    if (hitSoFar.includes(id)) return 'hit'
+    if ([0, 1, 4].includes(id)) return 'idle'
+    return 'dimmed'
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 20 }}>
+      <div style={{
+        padding: '8px 24px', borderRadius: 6,
+        background: KC_ORANGE + '18', border: `1px solid ${KC_ORANGE}60`,
+        fontFamily: S.mono, fontSize: 16, fontWeight: 700, color: KC_ORANGE,
+      }}>{ev.time}</div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{
+          padding: '8px 12px', borderRadius: 6,
+          border: `1px solid ${S.red}50`, background: S.red + '10',
+          fontFamily: S.mono, fontSize: 10, color: S.red,
+        }}>ATTACKER</div>
+        <span style={{ fontSize: 16, color: KC_ORANGE }}>→</span>
+        <div style={{ display: 'flex', gap: 10 }}>
+          {[0, 1, 2, 3, 4].map(id => (
+            <KcMiniNode key={id} id={id} state={nodeState(id)}
+              payload={id === ev.node_id ? { event_type: ev.event_type, code: ev.code } : null}
+            />
+          ))}
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', justifyContent: 'center', animation: 'fadeIn 0.5s ease' }}>
+        <div style={{
+          padding: '12px 18px', borderRadius: 8, minWidth: 220,
+          border: `1px solid ${KC_ORANGE}50`, background: KC_ORANGE + '10',
+        }}>
+          <div style={{ fontSize: 10, color: KC_ORANGE, fontFamily: S.mono, marginBottom: 8, letterSpacing: '0.08em' }}>
+            REQUEST DETAILS
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, fontFamily: S.mono }}>
+            <div><span style={{ color: S.textSec }}>node:      </span><span style={{ color: NODE_META[ev.node_id].color }}>{ev.node_name} (id={ev.node_id})</span></div>
+            <div><span style={{ color: S.textSec }}>event:     </span><span style={{ color: KC_ORANGE }}>{ev.event_type}</span></div>
+            <div><span style={{ color: S.textSec }}>endpoint:  </span><span style={{ color: S.textPri }}>{ev.endpoint}</span></div>
+            <div><span style={{ color: S.textSec }}>code:      </span><span style={{ color: ev.code < 400 ? S.green : S.red }}>HTTP {ev.code}</span></div>
+            <div><span style={{ color: S.textSec }}>session:   </span><span style={{ color: S.textPri }}>session_7f3a</span></div>
           </div>
         </div>
 
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div style={{ fontSize: 10, color: S.green, fontFamily: S.mono, letterSpacing: '0.1em' }}>
-            WHAT CROSSED THE FEDERATION CHANNEL
+        <div style={{
+          padding: '12px 18px', borderRadius: 8, flex: 1, minWidth: 200,
+          border: `1px solid #2d3748`, background: '#0a0f1a',
+        }}>
+          <div style={{ fontSize: 10, color: '#475569', fontFamily: S.mono, marginBottom: 8, letterSpacing: '0.08em' }}>
+            LOCAL NODE VIEW
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-            {KCA_ITEMS.map((item, i) => (
-              <div key={i} style={{ display: 'flex', gap: 7, alignItems: 'flex-start' }}>
-                <span style={{ fontSize: 11, flexShrink: 0, color: item.sent ? S.green : '#475569' }}>
-                  {item.sent ? '✓' : '✗'}
-                </span>
-                <div>
-                  <span style={{ fontSize: 11, fontWeight: 600, color: item.sent ? S.green : '#475569' }}>
-                    {item.label}
-                  </span>
-                  <span style={{ fontSize: 10, color: S.textSec }}> — {item.detail}</span>
+          <div style={{ fontSize: 12, color: S.textSec, lineHeight: 1.65, marginBottom: 10 }}>
+            {ev.local_verdict}
+          </div>
+          <div style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+            padding: '4px 10px', borderRadius: 4,
+            background: '#161f2e', border: `1px solid #243040`,
+            fontSize: 10, fontFamily: S.mono, color: '#475569',
+          }}>
+            ● NO LOCAL ALERT
+          </div>
+        </div>
+      </div>
+
+      <KcNarration>{ev.note}</KcNarration>
+    </div>
+  )
+}
+
+function PhaseBlindSpot() {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 20 }}>
+      <div style={{
+        display: 'flex', gap: 10, alignItems: 'center',
+        padding: '10px 20px', borderRadius: 8,
+        background: S.red + '12', border: `1px solid ${S.red}40`,
+        fontFamily: S.mono, fontSize: 13,
+      }}>
+        <span style={{ color: S.textSec }}>3 nodes hit</span>
+        <span style={{ color: '#334155' }}>·</span>
+        <span style={{ color: S.textSec }}>3 requests total</span>
+        <span style={{ color: '#334155' }}>·</span>
+        <span style={{ color: S.red, fontWeight: 700 }}>0 alerts fired</span>
+      </div>
+
+      <div style={{ display: 'flex', gap: 10 }}>
+        {[0, 1, 2, 3, 4].map(id => (
+          <KcMiniNode key={id} id={id} state={[0, 1, 4].includes(id) ? 'alerted' : 'dimmed'} />
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%', maxWidth: 580 }}>
+        {KC_ATTACK_EVENTS.map((ev, i) => (
+          <div key={i} style={{
+            display: 'flex', alignItems: 'center', gap: 10,
+            padding: '8px 14px', borderRadius: 6,
+            background: S.card, border: `1px solid ${S.border}`,
+            fontFamily: S.mono, fontSize: 11,
+          }}>
+            <span style={{ color: KC_ORANGE, minWidth: 56 }}>{ev.time}</span>
+            <span style={{ color: NODE_META[ev.node_id].color, minWidth: 60 }}>{ev.node_name}</span>
+            <span style={{ color: S.textSec, flex: 1 }}>{ev.event_type} · HTTP {ev.code}</span>
+            <span style={{
+              padding: '2px 8px', borderRadius: 3,
+              background: '#161f2e', border: `1px solid #243040`,
+              color: '#475569', fontSize: 9,
+            }}>NO ALERT</span>
+          </div>
+        ))}
+      </div>
+
+      <KcNarration>
+        Each node saw only <strong>1 request</strong> — far below any per-node rate limit or anomaly threshold.
+        Login thinks it was a normal login. Payment thinks it was a normal purchase. Admin thinks it was a mis-click.
+        <br /><br />
+        <span style={{ color: S.red }}>This is the core blind spot in isolated API security:</span> the attack is
+        distributed across nodes, so no individual node accumulates enough signal to raise an alert. The attacker's
+        behaviour is only suspicious when all three events are seen <em>together</em>.
+      </KcNarration>
+    </div>
+  )
+}
+
+function PhaseFederation({ fedArrows }) {
+  const FED_NODES = [
+    { id: 0, color: '#00d4ff', event: 'AUTH_SUCCESS',  time: 'T+0s' },
+    { id: 1, color: '#51cf66', event: 'PAYMENT_PROBE', time: 'T+60s' },
+    { id: 4, color: '#ff6b6b', event: 'ADMIN_PROBE',   time: 'T+2m7s' },
+  ]
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 22 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, justifyContent: 'center', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {FED_NODES.map(n => (
+            <div key={n.id} style={{
+              padding: '9px 14px', borderRadius: 7, minWidth: 130,
+              border: `1px solid ${n.color}60`, background: n.color + '0d',
+              fontFamily: S.mono, fontSize: 11,
+            }}>
+              <div style={{ color: n.color, fontWeight: 700, marginBottom: 2 }}>{NODE_META[n.id].name}</div>
+              <div style={{ color: S.textSec, fontSize: 9 }}>{n.event}</div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, alignItems: 'flex-start' }}>
+          {FED_NODES.map((n, i) => (
+            <div key={i} style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              opacity: fedArrows ? 1 : 0,
+              transition: `opacity 0.4s ease ${i * 0.18}s`,
+            }}>
+              <div style={{ width: 40, height: 2, background: S.green, borderRadius: 1 }} />
+              <span style={{ fontSize: 8, fontFamily: S.mono, color: S.green, whiteSpace: 'nowrap' }}>
+                SHA256(session_7f3a) · {n.time}
+              </span>
+              <div style={{ width: 16, height: 2, background: S.green, borderRadius: 1 }} />
+              <span style={{ color: S.green, fontSize: 11 }}>→</span>
+            </div>
+          ))}
+        </div>
+
+        <div style={{
+          padding: '18px 22px', borderRadius: 10, textAlign: 'center', minWidth: 130,
+          border: `2px solid ${S.cyan}60`, background: S.cyan + '0d',
+          fontFamily: S.mono,
+          opacity: fedArrows ? 1 : 0.35,
+          transition: 'opacity 0.5s ease 0.55s',
+        }}>
+          <div style={{ color: S.cyan, fontWeight: 700, fontSize: 13, marginBottom: 4 }}>FedGate</div>
+          <div style={{ color: S.cyan, fontSize: 10, marginBottom: 4 }}>Aggregator</div>
+          <div style={{ color: S.textSec, fontSize: 9 }}>CKKS-encrypted</div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 12, width: '100%', maxWidth: 660 }}>
+        <div style={{
+          flex: 1, padding: '12px 14px', borderRadius: 8,
+          border: `1px solid ${S.green}40`, background: S.green + '08',
+        }}>
+          <div style={{ fontSize: 10, color: S.green, fontFamily: S.mono, marginBottom: 8, letterSpacing: '0.08em' }}>
+            CROSSES THE CHANNEL
+          </div>
+          {[
+            'SHA-256(session_7f3a) — irreversible hash',
+            'Timestamp (relative offset only)',
+            'Node identifier (0, 1, 4)',
+            'CKKS-encrypted encoder weights',
+          ].map((item, i) => (
+            <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 5, fontSize: 11 }}>
+              <span style={{ color: S.green, flexShrink: 0 }}>✓</span>
+              <span style={{ color: S.textPri }}>{item}</span>
+            </div>
+          ))}
+        </div>
+        <div style={{
+          flex: 1, padding: '12px 14px', borderRadius: 8,
+          border: `1px solid #2d3748`, background: '#0a0f1a',
+        }}>
+          <div style={{ fontSize: 10, color: '#475569', fontFamily: S.mono, marginBottom: 8, letterSpacing: '0.08em' }}>
+            STAYS LOCAL
+          </div>
+          {[
+            'Raw API request logs',
+            'Session credentials / tokens',
+            'User identity / PII',
+            'Request payloads and bodies',
+            'Decoder model weights',
+          ].map((item, i) => (
+            <div key={i} style={{ display: 'flex', gap: 6, marginBottom: 5, fontSize: 11 }}>
+              <span style={{ color: '#475569', flexShrink: 0 }}>✗</span>
+              <span style={{ color: '#475569' }}>{item}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <KcNarration>
+        Alongside CKKS-encrypted model weights each round, FedGate's federation channel carries
+        <span style={{ color: S.green }}> minimal session-level signals</span>: only the hashed session ID
+        and a timestamp. The hash is one-way — SHA-256 cannot be reversed to recover the original session token.
+        Raw logs, credentials, and payloads never leave any node. This is the privacy guarantee.
+      </KcNarration>
+    </div>
+  )
+}
+
+function PhaseDetection() {
+  const [revealed, setRevealed] = useState(false)
+  useEffect(() => { const t = setTimeout(() => setRevealed(true), 500); return () => clearTimeout(t) }, [])
+
+  const events = [
+    { id: 0, name: 'Login',   time: 'T + 0s',    color: '#00d4ff', event: 'AUTH_SUCCESS',  elapsed: 0 },
+    { id: 1, name: 'Payment', time: 'T + 60s',   color: '#51cf66', event: 'PAYMENT_PROBE', elapsed: 60 },
+    { id: 4, name: 'Admin',   time: 'T + 2m 7s', color: '#ff6b6b', event: 'ADMIN_PROBE',   elapsed: 127 },
+  ]
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 20 }}>
+      <div style={{ width: '100%', maxWidth: 640 }}>
+        <div style={{ fontSize: 10, color: S.textSec, fontFamily: S.mono, marginBottom: 12, letterSpacing: '0.06em' }}>
+          SESSION HASH: SHA256(session_7f3a) · DETECTION WINDOW: 180s
+        </div>
+        <div style={{ position: 'relative', paddingBottom: 36 }}>
+          <div style={{ position: 'absolute', bottom: 20, left: 0, right: 0, height: 2, background: S.border, borderRadius: 1 }} />
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+            {events.map((ev, i) => (
+              <div key={i} style={{
+                display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+                opacity: revealed ? 1 : 0,
+                transform: revealed ? 'translateY(0)' : 'translateY(8px)',
+                transition: `all 0.5s ease ${i * 0.22}s`,
+              }}>
+                <div style={{
+                  padding: '8px 12px', borderRadius: 7, minWidth: 120, textAlign: 'center',
+                  border: `1px solid ${ev.color}60`, background: ev.color + '12',
+                  fontFamily: S.mono, fontSize: 10,
+                }}>
+                  <div style={{ color: ev.color, fontWeight: 700, marginBottom: 2 }}>{ev.name}</div>
+                  <div style={{ color: S.textSec }}>{ev.event}</div>
                 </div>
+                <div style={{ width: 2, height: 16, background: ev.color }} />
+                <div style={{ width: 10, height: 10, borderRadius: '50%', background: ev.color, zIndex: 1, position: 'relative' }} />
+                <div style={{ fontSize: 9, color: ev.color, fontFamily: S.mono, fontWeight: 700 }}>{ev.time}</div>
               </div>
             ))}
           </div>
         </div>
+      </div>
 
-        <div style={{ flex: 1.1, display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div style={{ fontSize: 10, color: S.red, fontFamily: S.mono, letterSpacing: '0.1em' }}>
-            SESSION BLOCK PROPAGATED VIA FEDERATION
+      <div style={{
+        width: '100%', maxWidth: 640,
+        padding: '12px 16px', borderRadius: 8,
+        border: `1px solid ${S.border}`, background: S.card,
+        fontFamily: S.mono, fontSize: 11, lineHeight: 1.85,
+      }}>
+        <div style={{ color: '#475569', marginBottom: 6, letterSpacing: '0.06em' }}>DETECTION LOGIC:</div>
+        <div><span style={{ color: '#00d4ff' }}>Login  </span><span style={{ color: S.textSec }}> at T+0s    — node_id=0 ✓</span></div>
+        <div><span style={{ color: '#51cf66' }}>Payment</span><span style={{ color: S.textSec }}> at T+60s   — node_id=1 ✓  (sequence: 0 → 1)</span></div>
+        <div><span style={{ color: '#ff6b6b' }}>Admin  </span><span style={{ color: S.textSec }}> at T+127s  — node_id=4 ✓  (sequence: 0 → 1 → 4)</span></div>
+        <div style={{ marginTop: 6, color: S.textSec }}>Elapsed: <span style={{ color: KC_ORANGE }}>127s</span> &lt; window <span style={{ color: S.green }}>180s</span> → SEQUENCE MATCH</div>
+      </div>
+
+      {revealed && (
+        <div style={{
+          width: '100%', maxWidth: 640,
+          padding: '14px 20px', borderRadius: 8,
+          border: `2px solid ${KC_ORANGE}`, background: KC_ORANGE + '12',
+          animation: 'fadeIn 0.5s ease 0.65s both',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
+            <span style={{ fontFamily: S.mono, fontSize: 14, fontWeight: 700, color: KC_ORANGE }}>
+              ⚠ KILL_CHAIN_DETECTED
+            </span>
+            <span style={{
+              padding: '2px 8px', borderRadius: 3,
+              background: KC_ORANGE + '25', border: `1px solid ${KC_ORANGE}50`,
+              fontFamily: S.mono, fontSize: 10, color: KC_ORANGE,
+            }}>Login → Payment → Admin</span>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-            {[0, 1, 4, 3, 2].map(id => {
-              const done = propagated.includes(id)
-              return (
-                <div key={id} style={{
-                  display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px',
-                  borderRadius: 5,
-                  background: done ? '#3b0707' : S.card,
-                  border: `1px solid ${done ? S.red + '50' : S.border}`,
-                  transition: 'all 0.35s ease',
-                  opacity: done ? 1 : 0.35,
-                }}>
-                  <Dot color={done ? S.red : '#475569'} size={6} />
-                  <span style={{ fontSize: 11, fontFamily: S.mono, color: done ? S.red : S.textSec, flex: 1 }}>
-                    {NODE_META[id].name}
-                  </span>
-                  {done && (
-                    <span style={{
-                      fontSize: 8, fontFamily: S.mono, fontWeight: 700,
-                      color: S.red, background: S.red + '20',
-                      padding: '1px 5px', borderRadius: 3,
-                    }}>SESSION BLOCKED</span>
-                  )}
-                  {!done && <Spinner />}
-                </div>
-              )
-            })}
+          <div style={{ fontSize: 11, color: S.textSec, fontFamily: S.mono }}>
+            session: session_7f3a · elapsed: 127s · nodes: [0, 1, 4]
           </div>
-          <div style={{ fontSize: 10, color: S.textSec, fontStyle: 'italic' }}>
-            session_7f3a rejected at all {propagated.length}/5 nodes
-          </div>
+        </div>
+      )}
+
+      <KcNarration>
+        The <span style={{ fontFamily: S.mono, color: S.cyan }}>KillChainDetector</span> checks whether
+        KILL_CHAIN_SEQUENCE <span style={{ fontFamily: S.mono, color: S.textSec }}>[0 → 1 → 4]</span> appeared
+        in order within 180 seconds for the same session hash. It did — in 127 seconds.
+        No single node had this picture. Only the federation layer, which received session hashes from all three
+        nodes, could correlate them into an alert.
+      </KcNarration>
+    </div>
+  )
+}
+
+function PhaseBlocked({ blockedNodes }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 20 }}>
+      <div style={{ display: 'flex', gap: 10 }}>
+        {[0, 1, 2, 3, 4].map(id => (
+          <KcMiniNode key={id} id={id} state={blockedNodes.includes(id) ? 'blocked' : 'idle'} />
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 5, width: '100%', maxWidth: 560 }}>
+        {[0, 1, 4, 3, 2].map((id) => {
+          const done = blockedNodes.includes(id)
+          return (
+            <div key={id} style={{
+              display: 'flex', alignItems: 'center', gap: 10,
+              padding: '8px 14px', borderRadius: 6,
+              background: done ? S.red + '12' : S.card,
+              border: `1px solid ${done ? S.red + '50' : S.border}`,
+              transition: 'all 0.4s ease', opacity: done ? 1 : 0.35,
+              fontFamily: S.mono, fontSize: 11,
+            }}>
+              <Dot color={done ? S.red : '#334155'} size={6} />
+              <span style={{ color: done ? S.red : S.textSec, flex: 1 }}>{NODE_META[id].name}</span>
+              {done
+                ? <span style={{ color: S.red, fontSize: 9, fontWeight: 700 }}>SESSION BLOCKED</span>
+                : <Spinner />}
+            </div>
+          )
+        })}
+      </div>
+
+      <div style={{
+        padding: '9px 20px', borderRadius: 6,
+        background: S.green + '10', border: `1px solid ${S.green}40`,
+        fontFamily: S.mono, fontSize: 12, color: S.green,
+      }}>
+        session_7f3a rejected at {blockedNodes.length}/5 nodes
+      </div>
+
+      <KcNarration>
+        The <span style={{ fontFamily: S.mono, color: S.cyan }}>SESSION_BLOCK</span> command propagates
+        across all 5 nodes via the federation channel. Because the block travels the same CKKS-encrypted
+        path as model weights, the attacker's session is revoked everywhere simultaneously — including nodes
+        like Search and Profile that never directly saw the suspicious traffic. No raw session data
+        ever left any node to make this happen.
+      </KcNarration>
+    </div>
+  )
+}
+
+function KillChainDemoOverlay({ onClose }) {
+  const [phase, setPhase] = useState(0)
+  const [blockedNodes, setBlockedNodes] = useState([])
+  const [fedArrows, setFedArrows] = useState(false)
+  const total = KC_PHASES.length
+
+  function next() {
+    if (phase >= total - 1) return
+    const nextPhase = phase + 1
+    setPhase(nextPhase)
+    if (nextPhase === 5) setTimeout(() => setFedArrows(true), 520)
+    if (nextPhase === 7) {
+      const order = [0, 1, 4, 3, 2]
+      order.forEach((id, i) => setTimeout(() => setBlockedNodes(prev => [...prev, id]), i * 360 + 400))
+    }
+  }
+
+  function prev() {
+    if (phase <= 0) return
+    if (phase === 5) setFedArrows(false)
+    if (phase === 7) setBlockedNodes([])
+    setPhase(p => p - 1)
+  }
+
+  function jumpTo(i) {
+    if (i >= phase) return
+    if (phase === 7 && i < 7) setBlockedNodes([])
+    if (phase >= 5 && i < 5) setFedArrows(false)
+    setPhase(i)
+  }
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, zIndex: 1000,
+      background: 'rgba(4,8,18,0.96)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      animation: 'fadeIn 0.22s ease',
+    }}>
+      <div style={{
+        width: '92vw', maxWidth: 830, maxHeight: '92vh',
+        background: S.bg, border: `1px solid ${S.border}`,
+        borderRadius: 14, display: 'flex', flexDirection: 'column',
+        overflow: 'hidden', boxShadow: '0 0 80px rgba(0,0,0,0.85)',
+      }}>
+        {/* Header */}
+        <div style={{
+          padding: '11px 18px', borderBottom: `1px solid ${S.border}`,
+          display: 'flex', alignItems: 'center', gap: 10,
+          background: '#080e1c', flexShrink: 0,
+        }}>
+          <span style={{ fontFamily: S.mono, fontSize: 12, fontWeight: 700, color: KC_ORANGE, letterSpacing: '0.07em' }}>
+            KILL CHAIN DEMO
+          </span>
+          <span style={{ color: S.border }}>|</span>
+          <span style={{ fontSize: 12, color: S.textPri, flex: 1 }}>{KC_PHASES[phase].title}</span>
+          <button onClick={onClose} style={{
+            background: 'transparent', border: `1px solid ${S.border}`,
+            color: S.textSec, borderRadius: 5, padding: '3px 10px',
+            cursor: 'pointer', fontSize: 11, fontFamily: S.mono,
+          }}>✕</button>
+        </div>
+
+        {/* Phase stepper */}
+        <div style={{
+          display: 'flex', borderBottom: `1px solid ${S.border}`,
+          background: '#080e1c', flexShrink: 0, overflowX: 'auto',
+        }}>
+          {KC_PHASES.map((p, i) => (
+            <div key={i}
+              onClick={() => i < phase && jumpTo(i)}
+              style={{
+                flex: 1, minWidth: 64, padding: '7px 4px', textAlign: 'center',
+                borderRight: i < KC_PHASES.length - 1 ? `1px solid ${S.border}` : 'none',
+                background: i === phase ? KC_ORANGE + '15' : i < phase ? S.green + '08' : 'transparent',
+                cursor: i < phase ? 'pointer' : 'default',
+                transition: 'background 0.2s',
+              }}>
+              <div style={{
+                fontSize: 8, fontFamily: S.mono, fontWeight: 700, letterSpacing: '0.05em',
+                color: i === phase ? KC_ORANGE : i < phase ? S.green : '#3a4f65',
+                marginBottom: 4,
+              }}>{p.label}</div>
+              <div style={{
+                width: 7, height: 7, borderRadius: '50%', margin: '0 auto',
+                background: i === phase ? KC_ORANGE : i < phase ? S.green : '#243040',
+                transition: 'all 0.3s',
+              }} />
+            </div>
+          ))}
+        </div>
+
+        {/* Content */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '22px 24px' }}>
+          {phase === 0 && <PhaseSetup />}
+          {phase === 1 && <PhaseAttackStage phase={1} />}
+          {phase === 2 && <PhaseAttackStage phase={2} />}
+          {phase === 3 && <PhaseAttackStage phase={3} />}
+          {phase === 4 && <PhaseBlindSpot />}
+          {phase === 5 && <PhaseFederation fedArrows={fedArrows} />}
+          {phase === 6 && <PhaseDetection />}
+          {phase === 7 && <PhaseBlocked blockedNodes={blockedNodes} />}
+        </div>
+
+        {/* Navigation */}
+        <div style={{
+          borderTop: `1px solid ${S.border}`, padding: '11px 18px',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          background: '#080e1c', flexShrink: 0,
+        }}>
+          <button onClick={prev} disabled={phase === 0} style={btnStyle(S.border, S.textPri, phase === 0)}>
+            ← Back
+          </button>
+          <span style={{ fontSize: 10, color: S.textSec, fontFamily: S.mono }}>
+            {phase + 1} / {total}
+          </span>
+          {phase === total - 1
+            ? <button onClick={onClose} style={btnStyle(S.green, S.bg)}>✓ Done</button>
+            : <button onClick={next} style={btnStyle(KC_ORANGE, '#fff')}>Next →</button>
+          }
         </div>
       </div>
     </div>
@@ -600,89 +1113,37 @@ function KillChainAlertPanel({ onReset }) {
 
 function Screen1({ onNext }) {
   const [selectedNode, setSelectedNode] = useState(null)
-  const [kcStep, setKcStep]       = useState(0)
-  const [kcRunning, setKcRunning] = useState(false)
-
-  function runKillChainDemo() {
-    if (kcRunning) return
-    setSelectedNode(null)
-    setKcStep(1); setKcRunning(true)
-    setTimeout(() => setKcStep(2), 2500)
-    setTimeout(() => setKcStep(3), 5000)
-    setTimeout(() => { setKcStep(4); setKcRunning(false) }, 6500)
-  }
-
-  function resetDemo() { setKcStep(0); setKcRunning(false) }
-
-  const kcEntryFor = (id) => {
-    if (id === 0 && kcStep >= 1) return KC_EVENTS[0]
-    if (id === 1 && kcStep >= 2) return KC_EVENTS[1]
-    if (id === 4 && kcStep >= 3) return KC_EVENTS[4]
-    return null
-  }
-
-  const kcAlerted = (id) => kcStep >= 4 && [0, 1, 4].includes(id)
+  const [showKcDemo, setShowKcDemo]     = useState(false)
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-
-      {kcStep > 0 && kcStep < 4 && (
-        <div style={{
-          padding: '7px 24px', background: '#140900',
-          borderBottom: `1px solid ${KC_ORANGE}35`,
-          display: 'flex', alignItems: 'center', gap: 10,
-          fontSize: 12, fontFamily: S.mono, flexShrink: 0,
-          animation: 'fadeIn 0.3s ease',
-        }}>
-          {kcRunning && <Spinner />}
-          <span style={{ color: KC_ORANGE, fontWeight: 700 }}>KILL CHAIN SIM</span>
-          <span style={{ color: S.textSec }}>—</span>
-          {[{l:'Login',s:1},{l:'→',s:null},{l:'Payment',s:2},{l:'→',s:null},{l:'Admin',s:3}].map((item,i) => (
-            <span key={i} style={{
-              color: item.s === null ? '#475569' : kcStep >= item.s ? KC_ORANGE : '#475569',
-              fontWeight: item.s && kcStep >= item.s ? 700 : 400,
-            }}>{item.l}</span>
-          ))}
-          <span style={{ marginLeft: 'auto', color: S.textSec, fontSize: 10 }}>
-            Each node sees 1 request · no local alert fires
-          </span>
-        </div>
-      )}
+      {showKcDemo && <KillChainDemoOverlay onClose={() => setShowKcDemo(false)} />}
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '16px 24px 8px' }}>
         <div style={{ display: 'flex', gap: 12 }}>
           {[0, 1, 2, 3, 4].map(id => (
             <NodeTrafficPanel key={id} nodeId={id}
-              onAttackClick={(nodeId) => { if (kcStep === 0) setSelectedNode(prev => prev === nodeId ? null : nodeId) }}
-              killChainEntry={kcEntryFor(id)}
-              killChainAlerted={kcAlerted(id)}
+              onAttackClick={(nodeId) => setSelectedNode(prev => prev === nodeId ? null : nodeId)}
             />
           ))}
         </div>
-        {!selectedNode && kcStep === 0 && (
+        {!selectedNode && (
           <div style={{ textAlign: 'center', marginTop: 10, fontSize: 11, color: S.textSec, fontStyle: 'italic' }}>
-            Click any red <span style={{ color: S.red, fontFamily: S.mono }}>DETECTED</span> row to analyse the attack · or run the Kill Chain Demo below
+            Click any red <span style={{ color: S.red, fontFamily: S.mono }}>DETECTED</span> row to analyse the attack · or open the Kill Chain Demo below
           </div>
         )}
       </div>
 
-      {kcStep >= 4
-        ? <KillChainAlertPanel onReset={resetDemo} />
-        : selectedNode !== null && kcStep === 0
-          ? <AttackDetailPanel nodeId={selectedNode} onClose={() => setSelectedNode(null)} />
-          : null
-      }
+      {selectedNode !== null && (
+        <AttackDetailPanel nodeId={selectedNode} onClose={() => setSelectedNode(null)} />
+      )}
 
       <div style={{
         borderTop: `1px solid ${S.border}`, padding: '14px 24px',
         display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0,
       }}>
-        <button
-          onClick={kcStep === 0 ? runKillChainDemo : resetDemo}
-          disabled={kcRunning}
-          style={btnStyle(kcStep === 0 ? KC_ORANGE : S.border, kcStep === 0 ? '#fff' : S.textSec, kcRunning)}
-        >
-          {kcStep === 0 ? 'Kill Chain Demo' : kcRunning ? 'Simulating...' : 'Reset Demo'}
+        <button onClick={() => setShowKcDemo(true)} style={btnStyle(KC_ORANGE, '#fff')}>
+          Kill Chain Demo
         </button>
         <button onClick={onNext} style={btnStyle(S.cyan, S.bg)}>See the Problem →</button>
       </div>
